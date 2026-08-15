@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skate-contest-app"
+version = "1.0.0"
+description = "Real-time scoring system for skate competitions"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi>=0.103.0",
+    "uvicorn[standard]>=0.23.2",
+    "python-multipart>=0.0.6",
+    "openpyxl>=3.1.2"
+]
+
+[tool.black]
+line-length = 79
+target-version = ['py39']
+
+[tool.isort]
+profile = "black"
+line_length = 79

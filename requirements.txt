@@ -1,0 +1,12 @@
+# Web framework & Server
+fastapi>=0.103.0
+uvicorn[standard]>=0.23.2
+
+# Form data parsing (required for Excel file upload)
+python-multipart>=0.0.6
+
+# Excel processing
+openpyxl>=3.1.2
+
+# Note: sqlite3, typing, logging, and dataclasses
+# are part of the Python Standard Library.

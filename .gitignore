@@ -1,0 +1,23 @@
+# IDE and environment variables
+.idea/
+.venv/
+.env
+
+# Python compilation and cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Frontend dependencies and builds
+frontend/node_modules/
+frontend/dist/
+backend/static/
+
+# Database and temporary processing files
+backend/*.db
+backend/temp_*.xlsx
+
+# OS generated files
+.DS_Store
+Thumbs.db
