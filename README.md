@@ -47,6 +47,7 @@ A responsive, high-contrast display designed for projectors and LED walls.
 * ![Run in Progress](doc/leaderboard_run_in_progress.png)
 * ![Voting Progress](doc/leaderboard_voting_2-3.png)
 * ![Voting End & Leaderboard Update](doc/leaderboard_voting_end_and_leaderboard.png)
+* ![Podium](doc/leaderboard_podium.png)
 
 ---
 
