@@ -15,6 +15,40 @@ A real-time, local-network web application designed to manage skateboarding comp
 * **Podium Mode**: A dedicated fullscreen view to celebrate the Top 3 winners at the end of the contest.
 
 ---
+## 📸 Interface Tour & Screenshots
+
+### 1. Control Room (Organizer Dashboard)
+**Phase 1: Event Setup & Enrollment**
+The setup phase allows the organizer to create events, configure the number of judges, and enroll skaters manually or via Excel.
+* ![Control Room Phase 1](doc/ControlRoom_Phase1.png)
+* ![Control Room Phase 1a](doc/ControlRoom_Phase1_a.png)
+* ![Control Room Phase 1b](doc/ControlRoom_Phase1_b.png)
+* ![Skater Enrollment](doc/ControlRoom_Phase1_Skaters_enroll.png)
+
+**Phase 2: Live Competition Control**
+The live dashboard controls the flow of the contest, pushing states to the judges and the public screen.
+* ![Live Start](doc/ControlRoom_Phase2_live_start.png)
+* ![Run in Progress](doc/ControlRoom_Phase2_run_in_progress.png)
+* ![Voting Started](doc/ControlRoom_Phase2_voting_start.png)
+* ![Manual Entry Backup](doc/ControlRoom_Phase2_voting_manual_entry.png)
+* ![Voting Ended](doc/ControlRoom_Phase2_voting_end.png)
+
+### 2. Judge Pad (Tablets)
+A distraction-free, dark-themed interface for the judges to evaluate skaters efficiently.
+* ![Select Chair](doc/Judge_pad_select_chair.png)
+* ![Connected](doc/Judge_pad_connected.png)
+* ![Run in Progress](doc/Judge_pad_run_in_progress.png)
+* ![Voting Interface](doc/Judge_pad_voting.png)
+* ![Vote Submission](doc/On_judge1_vote_submission.png)
+
+### 3. Public Score Board
+A responsive, high-contrast display designed for projectors and LED walls.
+* ![Waiting for Event](doc/leaderboard_waiting.png)
+* ![Run in Progress](doc/leaderboard_run_in_progress.png)
+* ![Voting Progress](doc/leaderboard_voting_2-3.png)
+* ![Voting End & Leaderboard Update](doc/leaderboard_voting_end_and_leaderboard.png)
+
+---
 
 ## 🏗️ Tech Stack
 
