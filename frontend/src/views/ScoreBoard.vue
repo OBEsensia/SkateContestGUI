@@ -44,9 +44,8 @@
 
         <div v-else class="active-state">
           <div class="competitor-info">
-            <span class="label">SKATER</span>
-            <h2 class="competitor-id">#{{ currentCompetitorId }}</h2>
-            <h3 class="skater-name" v-if="currentSkaterName">{{ currentSkaterName }}</h3>
+            <h2 class="skater-name">{{ currentSkaterName }}</h2>
+            <h3 class="skater-meta" v-if="currentNationality">{{ currentNationality }} - {{ currentCategory }}</h3>
             <h3 class="run-info">RUN {{ currentRunNumber }}</h3>
           </div>
 
@@ -65,13 +64,15 @@
 
           <div v-else-if="boardState === 'scored'" class="score-section">
             <div class="score-label">FINAL SCORE</div>
-            <div class="huge-score">{{ finalScore.toFixed(2) }}</div>
+            <div class="huge-score" :class="{'dns-score-text': finalScore < 0}">
+              {{ finalScore < 0 ? 'DNS' : finalScore.toFixed(2) }}
+            </div>
           </div>
         </div>
       </div>
 
       <div class="leaderboard-panel card">
-        <h2>Top 10 Leaderboard</h2>
+        <h2>Live Leaderboard</h2>
         <div class="table-responsive">
           <table class="leaderboard-table">
             <thead>
@@ -82,14 +83,30 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(entry, index) in leaderboard" :key="index">
-                <td class="col-rank"><span class="rank-badge" :class="'rank-' + (index + 1)">{{ index + 1 }}</span></td>
-                <td class="col-skater">
-                  <div class="lb-skater-name">{{ entry.name }}</div>
-                  <div class="lb-bib">Bib #{{ entry.bib_number }}</div>
-                </td>
-                <td class="col-score highlight">{{ entry.score.toFixed(2) }}</td>
-              </tr>
+              <template v-for="(entry, index) in leaderboard" :key="index">
+                <tr :class="{'dns-row': entry.score < 0}">
+                  <td class="col-rank">
+                    <span v-if="entry.score >= 0" class="rank-badge" :class="'rank-' + (index + 1)">{{ index + 1 }}</span>
+                    <span v-else class="rank-badge dns-badge">-</span>
+                  </td>
+                  <td class="col-skater">
+                    <div class="lb-skater-name">{{ entry.name }}</div>
+                    <div class="lb-meta">{{ entry.nationality }} - {{ entry.category }}</div>
+                  </td>
+                  <td class="col-score highlight">
+                    <span v-if="entry.score < 0" class="dns-text">DNS</span>
+                    <span v-else>{{ entry.score.toFixed(2) }}</span>
+                  </td>
+                </tr>
+                <!-- Cut Line Indicator (Simulated at Top 16 for this example) -->
+                <tr v-if="index + 1 === cutLineIndex && leaderboard.length > cutLineIndex && leaderboard[index+1].score >= 0" class="cut-line-row">
+                  <td colspan="3">
+                    <div class="cut-line">
+                      <span>CUT LINE</span>
+                    </div>
+                  </td>
+                </tr>
+              </template>
               <tr v-if="leaderboard.length === 0">
                 <td colspan="3" class="empty-state">No scores recorded yet.</td>
               </tr>
@@ -108,6 +125,8 @@ const isLive = ref(false);
 const competitionName = ref('SKATE CONTEST');
 const currentCompetitorId = ref(null);
 const currentSkaterName = ref('');
+const currentCategory = ref('');
+const currentNationality = ref('');
 const currentRunNumber = ref(null);
 const finalScore = ref(null);
 const receivedVotes = ref(0);
@@ -116,6 +135,9 @@ const leaderboard = ref([]);
 
 const boardState = ref('waiting');
 const isPodiumMode = ref(false);
+
+// Configure the cut line position (Top 16)
+const cutLineIndex = ref(16);
 
 let socket = null;
 
@@ -141,6 +163,8 @@ const connectWebSocket = () => {
       else if (payload.type === 'new_run') {
         currentCompetitorId.value = payload.competitor_id;
         currentSkaterName.value = payload.skater_name;
+        currentCategory.value = payload.category;
+        currentNationality.value = payload.nationality;
         currentRunNumber.value = payload.run_number;
         finalScore.value = null;
         receivedVotes.value = 0;
@@ -155,6 +179,9 @@ const connectWebSocket = () => {
       }
       else if (payload.type === 'run_completed') {
         finalScore.value = payload.final_score;
+        if (payload.is_dns || payload.final_score < 0) {
+            finalScore.value = -1.0;
+        }
         boardState.value = 'scored';
       }
       else if (payload.type === 'leaderboard_updated') {
@@ -193,10 +220,9 @@ onUnmounted(() => { if (socket) socket.close(); });
 .current-action-panel { flex: 1; align-items: center; justify-content: center; text-align: center; }
 .waiting-state h2 { color: #888; font-weight: normal; }
 .competitor-info { margin-bottom: 30px; }
-.label { color: #888; letter-spacing: 3px; font-size: 1.2rem; }
-.competitor-id { font-size: clamp(3rem, 6vw, 5rem); margin: 10px 0; color: #fff; }
-.skater-name { font-size: 2.2rem; color: #fff; margin: 0 0 15px 0; text-transform: uppercase; letter-spacing: 1px; }
-.run-info { font-size: 2rem; color: #1976d2; margin: 0; }
+.skater-name { font-size: clamp(3rem, 5vw, 4.5rem); margin: 10px 0; color: #fff; text-transform: uppercase; letter-spacing: 2px; }
+.skater-meta { font-size: 1.8rem; color: #aaa; margin: 0 0 15px 0; font-weight: normal; }
+.run-info { font-size: 2.2rem; color: #1976d2; margin: 0; }
 
 .status-message-box.skating { background-color: rgba(255, 152, 0, 0.1); border: 2px solid #ff9800; padding: 20px 40px; border-radius: 10px; animation: glow 1.5s infinite alternate; }
 .status-message-box.skating h2 { color: #ff9800; margin: 0 0 10px 0; font-size: 1.8rem; }
@@ -211,6 +237,7 @@ onUnmounted(() => { if (socket) socket.close(); });
 .score-section { animation: popIn 0.5s ease-out forwards; }
 .score-label { font-size: 1.5rem; color: #ff9800; letter-spacing: 5px; margin-bottom: -10px; }
 .huge-score { font-size: clamp(6rem, 15vw, 12rem); font-weight: 900; color: #fff; line-height: 1.1; text-shadow: 0 0 20px rgba(255, 152, 0, 0.4); }
+.dns-score-text { color: #d32f2f !important; text-shadow: 0 0 20px rgba(211, 47, 47, 0.4) !important; font-size: clamp(4rem, 10vw, 8rem) !important; }
 @keyframes popIn { 0% { transform: scale(0.8); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
 
 .leaderboard-panel { flex: 1; }
@@ -219,13 +246,27 @@ onUnmounted(() => { if (socket) socket.close(); });
 .leaderboard-table { width: 100%; min-width: 400px; border-collapse: collapse; }
 .leaderboard-table th, .leaderboard-table td { padding: 15px; text-align: left; border-bottom: 1px solid #333; }
 .leaderboard-table th { color: #888; text-transform: uppercase; font-size: 0.9rem; }
+.leaderboard-table tbody tr { transition: background-color 0.2s; }
 .leaderboard-table tbody tr:hover { background-color: #222; }
+
+/* DNS Row Styling */
+.dns-row { background-color: rgba(211, 47, 47, 0.1); opacity: 0.6; }
+.dns-row:hover { background-color: rgba(211, 47, 47, 0.2) !important; }
+.dns-text { color: #ff5252; font-weight: bold; font-style: italic; }
+.dns-badge { background-color: #d32f2f !important; color: white !important; }
+
+/* Cut Line Styling */
+.cut-line-row td { padding: 0 !important; border: none !important; }
+.cut-line { display: flex; align-items: center; text-align: center; color: #ff5252; font-weight: bold; font-size: 0.8rem; letter-spacing: 2px; margin: 10px 0; }
+.cut-line::before, .cut-line::after { content: ''; flex: 1; border-bottom: 2px dashed #ff5252; }
+.cut-line span { padding: 0 10px; }
+
 .rank-badge { display: inline-block; width: 30px; height: 30px; line-height: 30px; text-align: center; background-color: #333; border-radius: 50%; font-weight: bold; }
 .rank-1 { background-color: #ffd700; color: #000; }
 .rank-2 { background-color: #c0c0c0; color: #000; }
 .rank-3 { background-color: #cd7f32; color: #000; }
-.lb-skater-name { font-weight: bold; font-size: 1.1rem; color: #fff; margin-bottom: 4px; }
-.lb-bib { font-size: 0.85rem; color: #888; }
+.lb-skater-name { font-weight: bold; font-size: 1.1rem; color: #fff; margin-bottom: 4px; text-transform: uppercase; }
+.lb-meta { font-size: 0.85rem; color: #888; }
 .col-score.highlight { font-weight: bold; color: #4caf50; font-size: 1.2rem; }
 .empty-state { text-align: center !important; color: #666; padding: 30px !important; font-style: italic; }
 
