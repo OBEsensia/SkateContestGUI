@@ -3,6 +3,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Optional, Dict, List, Any
 import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -123,17 +124,14 @@ def _find_column_index(
         possible_names: List[str]
 ) -> Optional[int]:
     """Smartly finds the column index, avoiding 'nom'/'prénom' collisions."""
-    # 1. Exact Match Priority
     for col_idx, header_val in headers.items():
         clean_header = header_val.strip().lower()
         if clean_header in possible_names:
             return col_idx
 
-    # 2. Substring Match with Protection
     for col_idx, header_val in headers.items():
         clean_header = header_val.strip().lower()
         for name in possible_names:
-            # Prevent "nom" from triggering on "prenom" or "prénom"
             if name == "nom" and ("pre" in clean_header or "pré" in clean_header):
                 continue
             if name in clean_header:
@@ -253,7 +251,6 @@ def get_pools_with_competitors(
         category_id: int,
         phase: str
 ) -> List[Dict[str, Any]]:
-    """Retrieves all pools and their assigned competitors for a specific phase."""
     query = """
         SELECT p.id, p.name, pc.start_order, c.id, c.first_name, c.last_name, c.nationality
         FROM pool p
@@ -289,7 +286,6 @@ def get_phase_ranking(
         category_id: int,
         phase: str
 ) -> List[Dict[str, Any]]:
-    """Calculates the ranking based on the Best Run score in a specific phase."""
     query = """
         SELECT c.id, c.first_name, c.last_name, c.nationality, MAX(r.final_score) as best_score
         FROM competitor c
@@ -324,14 +320,11 @@ def generate_next_phase(
         top_n: int,
         pools_count: int
 ) -> List[int]:
-    """Generates the next phase by taking the Top N and assigning them in reverse order."""
     ranking = get_phase_ranking(db_connection, competition_id, category_id, current_phase)
     qualified = ranking[:top_n]
 
-    # Reverse the order: The 1st place skater goes last.
     qualified.reverse()
 
-    # Calculate distribution logic
     base_count = len(qualified) // pools_count
     remainder = len(qualified) % pools_count
 
@@ -349,7 +342,6 @@ def generate_next_phase(
         pool_id = create_pool(db_connection, pool_data)
         pool_ids.append(pool_id)
 
-        # Distribute remainder skaters across the first pools
         skaters_in_this_pool = base_count + (1 if i < remainder else 0)
 
         for start_order in range(1, skaters_in_this_pool + 1):
@@ -365,3 +357,81 @@ def generate_next_phase(
 
     logger.info(f"Generated {next_phase} with {len(qualified)} skaters in {pools_count} pools.")
     return pool_ids
+
+
+def export_phase_results_to_excel(
+        db_connection: sqlite3.Connection,
+        competition_id: int,
+        file_path: str
+) -> None:
+    """Exports all results, grouped by category and phase, into a single Excel file."""
+    workbook = openpyxl.Workbook()
+    workbook.remove(workbook.active)
+
+    cursor = db_connection.cursor()
+
+    # Get all categories
+    cursor.execute("SELECT id, name FROM category WHERE competition_id = ?", (competition_id,))
+    categories = cursor.fetchall()
+
+    phases = ["Qualifications", "Semi-Final", "Final"]
+
+    dns_fill = PatternFill(start_color="FFCDD2", end_color="FFCDD2", fill_type="solid")
+    dns_font = Font(color="B71C1C", italic=True)
+    header_font = Font(bold=True)
+
+    for cat_id, cat_name in categories:
+        for phase in phases:
+            ranking = get_phase_ranking(db_connection, competition_id, cat_id, phase)
+            if not ranking or all(r["best_score"] == 0.0 for r in ranking):
+                continue  # Skip empty phases
+
+            sheet_name = f"{cat_name[:15]}_{phase[:15]}"
+            sheet = workbook.create_sheet(title=sheet_name)
+
+            headers = ["Rank", "First Name", "Last Name", "Nationality", "Best Score", "Run 1", "Run 2", "Run 3"]
+            sheet.append(headers)
+
+            for cell in sheet[1]:
+                cell.font = header_font
+
+            for rank_data in ranking:
+                c_id = rank_data["competitor_id"]
+                cursor.execute(
+                    "SELECT run_number, final_score FROM run WHERE competitor_id = ? AND phase = ?",
+                    (c_id, phase)
+                )
+                runs = {r[0]: r[1] for r in cursor.fetchall()}
+
+                r1 = runs.get(1, "")
+                r2 = runs.get(2, "")
+                r3 = runs.get(3, "")
+
+                best_score = rank_data["best_score"]
+                is_dns = (best_score < 0)
+
+                row_data = [
+                    "-" if is_dns else rank_data["rank"],
+                    rank_data["first_name"],
+                    rank_data["last_name"],
+                    rank_data["nationality"],
+                    "DNS" if is_dns else round(best_score, 2),
+                    "DNS" if r1 == -1.0 else (round(r1, 2) if r1 != "" else ""),
+                    "DNS" if r2 == -1.0 else (round(r2, 2) if r2 != "" else ""),
+                    "DNS" if r3 == -1.0 else (round(r3, 2) if r3 != "" else "")
+                ]
+
+                sheet.append(row_data)
+
+                # Apply DNS styling if best score is < 0
+                if is_dns:
+                    for cell in sheet[sheet.max_row]:
+                        cell.fill = dns_fill
+                        cell.font = dns_font
+
+    if not workbook.sheetnames:
+        workbook.create_sheet(title="No Results")
+        workbook["No Results"].append(["No data available for export."])
+
+    workbook.save(file_path)
+    logger.info(f"Results exported successfully to {file_path}")
