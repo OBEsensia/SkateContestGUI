@@ -63,7 +63,8 @@ class CompetitionCreate(BaseModel):
 class CompetitorCreate(BaseModel):
     first_name: str
     last_name: str
-    bib_number: int
+    category: str
+    nationality: str
 
 
 @app.post("/competitions/")
@@ -107,7 +108,8 @@ def register_competitor(
         competition_id=competition_id,
         first_name=competitor_data.first_name,
         last_name=competitor_data.last_name,
-        bib_number=competitor_data.bib_number
+        category=competitor_data.category,
+        nationality=competitor_data.nationality
     )
     try:
         competitor_id = register_competitor_manually(db_conn, registration)
@@ -136,6 +138,8 @@ def upload_competitors_excel(
             competition_id=competition_id
         )
         return {"imported_count": imported_count}
+    except KeyError as error:
+        raise HTTPException(status_code=400, detail=str(error))
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
     finally:
@@ -151,12 +155,25 @@ def get_competitors_for_competition(
     try:
         cursor = db_conn.cursor()
         cursor.execute(
-            """SELECT id, first_name, last_name, bib_number FROM competitor 
-               WHERE competition_id = ? ORDER BY bib_number ASC""",
+            """
+            SELECT c.id, c.first_name, c.last_name, cat.name as category, c.nationality 
+            FROM competitor c
+            JOIN category cat ON c.category_id = cat.id
+            WHERE c.competition_id = ? 
+            ORDER BY cat.name ASC, c.last_name ASC
+            """,
             (competition_id,)
         )
         rows = cursor.fetchall()
-        return [{"id": r[0], "first_name": r[1], "last_name": r[2], "bib_number": r[3]} for r in rows]
+        return [
+            {
+                "id": r[0],
+                "first_name": r[1],
+                "last_name": r[2],
+                "category": r[3],
+                "nationality": r[4]
+            } for r in rows
+        ]
     except Exception as error:
         logger.error(f"Error fetching competitors: {error}")
         raise HTTPException(status_code=500, detail="Database error")
@@ -165,7 +182,6 @@ def get_competitors_for_competition(
 class ConnectionManager:
     def __init__(self) -> None:
         self.active_connections: List[WebSocket] = []
-        # Le cache complet des derniers événements
         self.cached_meta: Dict[str, Any] = {}
         self.cached_run: Dict[str, Any] = {}
         self.cached_voting: Dict[str, Any] = {}
@@ -176,7 +192,6 @@ class ConnectionManager:
         await websocket.accept()
         self.active_connections.append(websocket)
 
-        # Rattrapage (Catch-up) immédiat pour celui qui se connecte
         if self.cached_meta:
             await websocket.send_json(self.cached_meta)
         if self.cached_leaderboard:
@@ -194,13 +209,12 @@ class ConnectionManager:
     async def broadcast_json(self, message: Dict[str, Any]) -> None:
         msg_type = message.get("type")
 
-        # Mise à jour intelligente du cache
         if msg_type == "board_meta":
             self.cached_meta = message
         elif msg_type == "new_run":
             self.cached_run = message
-            self.cached_voting = {}  # Réinitialise l'état de vote
-            self.cached_podium = {}  # Quitte le mode podium
+            self.cached_voting = {}
+            self.cached_podium = {}
         elif msg_type == "voting_opened":
             self.cached_voting = message
         elif msg_type == "podium_mode":
@@ -219,7 +233,6 @@ global_manager = ConnectionManager()
 async def websocket_endpoint(websocket: WebSocket):
     await global_manager.connect(websocket)
 
-    # Informer explicitement de la configuration
     await websocket.send_json({
         "type": "board_meta",
         "competition_name": getattr(global_manager, "competition_name", "SKATE CONTEST"),
@@ -246,6 +259,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     "type": "new_run",
                     "competitor_id": data.get("competitor_id"),
                     "skater_name": data.get("skater_name", ""),
+                    "category": data.get("category", ""),
+                    "nationality": data.get("nationality", ""),
                     "run_number": data.get("run_number")
                 })
 
