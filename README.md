@@ -4,17 +4,44 @@ A real-time, local-network web application designed to manage skateboarding comp
 
 ## 🌟 Key Features
 
-* **Real-Time Synchronization**: Powered by FastAPI WebSockets for instant score submissions and leaderboard updates.
-* **Resilient Architecture (Anti-F5)**: The system survives accidental page refreshes and temporary network drops using local storage and server-side state caching.
-* **Three Dedicated Interfaces**:
-  1. **Control Room (Organizer)**: The main dashboard to manage the event, add skaters, and control the flow of the competition.
-  2. **Judge Pad (Tablets)**: A streamlined, touch-friendly interface for judges to submit scores.
-  3. **Score Board (Public Screen)**: A responsive, high-contrast display for the public showing current skater status, live voting progress, and a dynamic Top 10 leaderboard.
-* **Flexible Configuration**: Choose between 3 or 5 judges per event.
-* **Excel Import**: Quickly load competitor lists using `.xlsx` files.
-* **Podium Mode**: A dedicated fullscreen view to celebrate the Top 3 winners at the end of the contest.
+### 1. Registration & Management (Phase 1)
+* **Smart Excel Import**: Instantly load skater lists via `.xlsx` files. The algorithm automatically resolves first name/last name column conflicts and parses categories.
+* **Manual Wildcard Entry**: Add last-minute skaters on the fly directly from the control interface.
+
+### 2. Tournament Sandbox & Phase Engine (Phase 2)
+* **Tournament Sandbox**: A visual workspace allowing the organizer to filter by category and Phase (Qualifications, Semi-Final, Final).
+* **Heat/Pool Creation**: Generate pools manually or auto-distribute. Easily assign or reassign unseeded skaters using dropdowns.
+* **Auto-Qualification Engine (Top N)**: 
+    * Automatically extracts the Top X skaters based on their Best Run score in a given phase.
+    * **Reverse Start Order**: Skaters who qualify 1st will automatically skate last in the next phase (official skate contest rule).
+    * **Mathematical Distribution**: Evenly distributes qualified skaters across the new phase's heats, handling remainders mathematically.
+
+### 3. Live Control & Operational Robustness (Phase 3)
+* **1-Click "Call to Screen"**: Click "Call" next to a skater in their live heat to instantly push them to the public scoreboard and notify the judges' tablets.
+* **Safety "Re-Call" Feature**: If a mistake is made, clicking "🔄 Re-Call" resets the current run. The system retrieves the judges' previous score history for that run so they don't have to start from scratch.
+* **DNS (Did Not Start) Handling**: Disqualify a skater with 1 click. Assigns a `-1.0` score in the database, locking them at the bottom of the leaderboard and excluding them from future phases.
+* **Anti-Deadlock Security**: If a voting session gets stuck, the **⏹️ EXIT LIVE** button sends an asynchronous cancellation signal, clears the server's WebSocket cache, and instantly unlocks the organizer and judge interfaces.
+
+### 4. Reporting & Archiving (Phase 4)
+* **Multi-Tab Excel Export**: Generate an official `.xlsx` results file with one click (one tab per category and phase).
+* **Full Traceability**: The export lists the actual rank, individual Run scores (1, 2, and 3), highlights **DNS** skaters in red, and explicitly states if a skater qualified for the next phase (including their next Heat and Start Order).
 
 ---
+
+## 📐 Core Algorithm Logic
+
+### Leaderboard Sorting & Start Order
+To prevent empty or messy leaderboards at the start of a phase, the backend uses a multi-level SQL sorting rule:
+1.  **Best Score** (Descending)
+2.  **Heat / Pool Name** (Ascending - if scores are tied at 0.0)
+3.  **Start Order** (Ascending)
+*Result: At the start of a phase, the public screen displays the leaderboard in the exact chronological order skaters will drop in.*
+
+### DNS (Did Not Start) Logic
+Skaters marked as **DNS** receive a `-1.0` score. In the system, non-participants remain at `0.0` (provisional). Because the scoring scale is `0.0` to `100.0`, DNS skaters logically sink to the absolute bottom of the database ranking and are flagged with a red badge.
+
+---
+
 ## 📸 Interface Tour & Screenshots
 
 ### 1. Control Room (Organizer Dashboard)
@@ -95,25 +122,29 @@ Once the server is running, access the interfaces via any web browser on the sam
 - Public Score Board: http://localhost:8000/#/board
 - Judge Tablets: http://localhost:8000/#/judge
 
-## 📖 Usage Guide (Day of the Event)
-### Event Setup
-1. Open the Control Room.
-2. Create a new competition or load an existing one.
-3. Import your .xlsx competitor list or use the "Manual Entry" to add wildcards.
+## ⚙️ Usage Guide (Running a Contest)
+### Step 1: Preparation & Import
+1. Launch the server using start_skate_contest.bat.
+2. Open the Control Room (http://localhost:8000).
+3. Create the event and import the skater registration Excel file.
 
-4. Select the number of judges (3 or 5) and click GO LIVE.
+### Step 2: The Sandbox (Heats Creation)
+1. Select your category and the Qualifications phase.
+2. Create your Heats (e.g., "Heat 1", "Heat 2").
+3. Assign your skaters from the orange Unassigned Skaters pool into their respective heats.
 
-### Live Competition Workflow
-1. Call Skater: Enter the Bib Number and Run Number, then click 1. Call Skater (On Course).
-    - The public screen will show "RUN IN PROGRESS". Judge tablets remain locked.
+### Step 3: Going Live
+1. Click GO LIVE.
+2. Click Call next to the first skater on the list.
+3. Once their run is over, click 1. Open Voting. Judges score on their tablets. Once the last judge submits, the final average is calculated and saved.
+4. Repeat for all skaters in the phase.
 
-2. Open Voting: Once the run is finished, click 2. Open Voting.
-    - Judge tablets unlock. The public screen shows the voting progress bar.
-
-3. Scoring: Judges submit their scores (0.0 to 10.0) from their tablets.
-    - If a tablet fails, the organizer can use the "Direct Judge Input" panel to submit a score manually.
-
-4. Result: Once all scores are received, the system calculates the average, displays the final score, and updates the Top 10 Leaderboard automatically.
+### Step 4: Closing the Phase & Qualifying
+1. Click ⏹️ EXIT LIVE.
+2. Click 📥 Export Results to download and archive the official Qualifications Excel file.
+3. In the green Auto-Generate Next Phase box, set it to Semi-Final, define the Top N to qualify (e.g., 16), and the number of target pools (e.g., 4).
+4. Click ⚡ Generate. The system calculates the cut, reverses the start order, and builds the semi-final heats.
+5. Click GO LIVE again, switch the view to Semi-Final, and call your first skater!
 
 ### End of Contest
 Click the 🏆 SHOW PODIUM (END CONTEST) button in the Control Room to switch the public Score Board to a celebratory fullscreen display of the Top 3 skaters.
@@ -141,12 +172,11 @@ skate-contest/
 ```
 
 ## ⚠️ Troubleshooting
-- **Blank screen on localhost:8000?**
-Ensure you have run npm run build in the frontend directory. The backend needs the generated static files to serve the application.
+- **"Call" buttons stuck on gray (Inactive)?**
+This means a previous run was left open or interrupted. Simply click ⏹️ EXIT LIVE. The system will trigger the cancel_voting procedure, flush the server's memory, and unlock all buttons.
 
-- **WebSocket disconnected / Actions not triggering?**
-Check the terminal running the Python server for errors. Ensure all devices (tablets, public screen PC) are connected to the exact same Wi-Fi network as the server host.
+- **Visual changes not applying?**
+If you edit the Vue interface, run npm run build in the frontend folder to update the static files, then hard-refresh your browser (Ctrl + F5).
 
-- **"Cannot use import statement outside a module" error?**
-This means the backend served raw Vue/JS code instead of the built files. Ensure frontend/index.html is a standard Vite skeleton and run npm run build again.
-- 
+- **Backend code modifications not applying?**
+Any change to Python files (main.py or competition_manager.py) requires a hard restart of the command prompt server (close the black window and rerun the .bat file).

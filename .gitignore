@@ -21,3 +21,5 @@ backend/temp_*.xlsx
 # OS generated files
 .DS_Store
 Thumbs.db
+/backend/export_*.xlsx
+/*.db
