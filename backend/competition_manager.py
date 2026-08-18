@@ -5,7 +5,6 @@ from typing import Optional, Dict, List, Any
 import openpyxl
 from openpyxl.styles import Font, PatternFill
 
-# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -61,8 +60,8 @@ def register_competitor_manually(db_connection: sqlite3.Connection, registration
     try:
         cursor = db_connection.cursor()
         cursor.execute(query, (
-        registration.competition_id, registration.first_name, registration.last_name, category_id,
-        registration.nationality))
+            registration.competition_id, registration.first_name, registration.last_name, category_id,
+            registration.nationality))
         db_connection.commit()
         return cursor.lastrowid
     except sqlite3.IntegrityError:
@@ -143,7 +142,6 @@ def assign_competitor_to_pool(db_connection: sqlite3.Connection, pool_id: int, c
 
 def get_pools_with_competitors(db_connection: sqlite3.Connection, competition_id: int, category_id: int, phase: str,
                                run_number: Optional[int] = None) -> List[Dict[str, Any]]:
-    """Retrieves all pools and their assigned competitors, including their score for a specific run if requested."""
     if run_number is not None:
         query = """
             SELECT p.id, p.name, pc.start_order, c.id, c.first_name, c.last_name, c.nationality, r.final_score
@@ -177,13 +175,14 @@ def get_pools_with_competitors(db_connection: sqlite3.Connection, competition_id
             pools_dict[p_id]["competitors"].append({
                 "competitor_id": c_id, "first_name": f_name, "last_name": l_name,
                 "nationality": nat, "start_order": start_order,
-                "current_run_score": score  # Transmis à l'interface
+                "current_run_score": score
             })
     return list(pools_dict.values())
 
 
-def get_phase_ranking(db_connection: sqlite3.Connection, competition_id: int, category_id: int, phase: str) -> List[Dict[str, Any]]:
-    """Calculates the ranking ensuring that 0.0 > -1.0 (DNS) and ordering unranked skaters by heat & running order."""
+def get_phase_ranking(db_connection: sqlite3.Connection, competition_id: int, category_id: int, phase: str) -> List[
+    Dict[str, Any]]:
+    cursor = db_connection.cursor()
     query = """
         SELECT c.id, c.first_name, c.last_name, c.nationality,
                COALESCE(MAX(r.final_score), 0.0) as best_score,
@@ -197,21 +196,33 @@ def get_phase_ranking(db_connection: sqlite3.Connection, competition_id: int, ca
         GROUP BY c.id
         ORDER BY best_score DESC, pool_name ASC, pc.start_order ASC
     """
-    cursor = db_connection.cursor()
     cursor.execute(query, (phase, phase, competition_id, category_id))
+    competitors_data = cursor.fetchall()
+
+    cursor.execute("SELECT competitor_id, run_number, final_score FROM run WHERE phase = ?", (phase,))
+    all_runs = cursor.fetchall()
+
+    runs_by_competitor = {}
+    for c_id, r_num, f_score in all_runs:
+        if c_id not in runs_by_competitor:
+            runs_by_competitor[c_id] = {}
+        runs_by_competitor[c_id][r_num] = f_score
 
     ranking: List[Dict[str, Any]] = []
     rank_counter = 1
-    for row in cursor.fetchall():
+    for row in competitors_data:
         c_id, f_name, l_name, nat, best_score, pool_name, start_order = row
         is_dns = (best_score < 0)
+        c_runs = runs_by_competitor.get(c_id, {})
+
         ranking.append({
             "rank": "-" if is_dns else rank_counter,
             "competitor_id": c_id,
             "first_name": f_name,
             "last_name": l_name,
             "nationality": nat,
-            "best_score": best_score
+            "best_score": best_score,
+            "run_scores": c_runs
         })
         if not is_dns:
             rank_counter += 1
@@ -221,10 +232,8 @@ def get_phase_ranking(db_connection: sqlite3.Connection, competition_id: int, ca
 def generate_next_phase(db_connection: sqlite3.Connection, competition_id: int, category_id: int, current_phase: str,
                         next_phase: str, top_n: int, pools_count: int) -> List[int]:
     ranking = get_phase_ranking(db_connection, competition_id, category_id, current_phase)
-
-    # Filter out DNS skaters, then take top N
     qualified = [r for r in ranking if r["best_score"] >= 0][:top_n]
-    qualified.reverse()  # Reverse order: 1st place goes last
+    qualified.reverse()
 
     base_count = len(qualified) // pools_count
     remainder = len(qualified) % pools_count
@@ -263,7 +272,6 @@ def export_phase_results_to_excel(db_connection: sqlite3.Connection, competition
 
     for cat_id, cat_name in categories:
         for phase in phases:
-            # Check if anyone is assigned to this phase
             cursor.execute("""
                 SELECT 1 FROM pool_competitor pc 
                 JOIN pool p ON pc.pool_id = p.id 
@@ -272,12 +280,21 @@ def export_phase_results_to_excel(db_connection: sqlite3.Connection, competition
             if not cursor.fetchone(): continue
 
             ranking = get_phase_ranking(db_connection, competition_id, cat_id, phase)
-
             sheet_name = f"{cat_name[:15]}_{phase[:15]}"
             sheet = workbook.create_sheet(title=sheet_name)
 
+            # Detect max runs dynamically
+            max_run_num = 0
+            for r in ranking:
+                if r["run_scores"]:
+                    max_run_num = max(max_run_num, max(r["run_scores"].keys()))
+            max_runs_to_display = max(2, max_run_num)
+
             next_phase = next_phase_map.get(phase)
-            headers = ["Rank", "First Name", "Last Name", "Nationality", "Best Score", "Run 1", "Run 2", "Run 3"]
+            headers = ["Rank", "First Name", "Last Name", "Nationality", "Best Score"]
+            for i in range(1, max_runs_to_display + 1):
+                headers.append(f"Run {i}")
+
             if next_phase:
                 headers.extend([f"Qualified for {next_phase}?", f"Heat ({next_phase})", f"Order ({next_phase})"])
 
@@ -286,11 +303,6 @@ def export_phase_results_to_excel(db_connection: sqlite3.Connection, competition
 
             for rank_data in ranking:
                 c_id = rank_data["competitor_id"]
-                cursor.execute("SELECT run_number, final_score FROM run WHERE competitor_id = ? AND phase = ?",
-                               (c_id, phase))
-                runs = {r[0]: r[1] for r in cursor.fetchall()}
-
-                r1, r2, r3 = runs.get(1, ""), runs.get(2, ""), runs.get(3, "")
                 best_score = rank_data["best_score"]
                 is_dns = (best_score < 0)
 
@@ -299,11 +311,17 @@ def export_phase_results_to_excel(db_connection: sqlite3.Connection, competition
                     rank_data["first_name"],
                     rank_data["last_name"],
                     rank_data["nationality"],
-                    "DNS" if is_dns else round(best_score, 2),
-                    "DNS" if r1 == -1.0 else (round(r1, 2) if r1 != "" else ""),
-                    "DNS" if r2 == -1.0 else (round(r2, 2) if r2 != "" else ""),
-                    "DNS" if r3 == -1.0 else (round(r3, 2) if r3 != "" else "")
+                    "DNS" if is_dns else round(best_score, 2)
                 ]
+
+                for i in range(1, max_runs_to_display + 1):
+                    r_score = rank_data["run_scores"].get(i, "")
+                    if r_score == -1.0:
+                        row_data.append("DNS")
+                    elif r_score != "":
+                        row_data.append(round(r_score, 2))
+                    else:
+                        row_data.append("")
 
                 if next_phase:
                     cursor.execute("""
