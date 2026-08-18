@@ -16,7 +16,6 @@
       </div>
     </header>
 
-    <!-- PHASE 1: SETUP -->
     <section v-if="!isLive" class="setup-section card">
       <h2>1. Event Setup & Registration</h2>
 
@@ -88,7 +87,6 @@
       </div>
     </section>
 
-    <!-- PHASE 2: TOURNAMENT SANDBOX (POOLS & HEATS) -->
     <section v-if="competitionId && !isLive" class="sandbox-section card">
       <h2>2. Tournament Sandbox (Pools & Heats)</h2>
 
@@ -172,7 +170,6 @@
       </div>
     </section>
 
-    <!-- PHASE 3: LIVE CONTROL DASHBOARD -->
     <section v-if="isLive" class="live-section card">
       <h2>Live Control Dashboard</h2>
 
@@ -204,13 +201,21 @@
           <ul class="skater-assign-list">
             <li v-for="skater in pool.competitors" :key="skater.competitor_id"
                 :class="{ 'active-skater': currentCompetitorId === skater.competitor_id }">
-              <span>{{ skater.start_order }}. {{ skater.first_name }} {{ skater.last_name }}</span>
+              <span class="skater-name-block">
+                {{ skater.start_order }}. {{ skater.first_name }} {{ skater.last_name }}
+                <span v-if="skater.current_run_score !== null && skater.current_run_score !== undefined"
+                      class="inline-score-badge"
+                      :class="{ 'dns-badge-small': skater.current_run_score < 0 }">
+                  {{ skater.current_run_score < 0 ? 'DNS' : skater.current_run_score.toFixed(1) }}
+                </span>
+              </span>
               <button
-                class="btn primary small"
-                @click="callSkaterDirectly(skater.competitor_id, skater.first_name, skater.last_name)"
-                :disabled="isVotingOpen || currentCompetitorId === skater.competitor_id"
+                class="btn small"
+                :class="currentCompetitorId === skater.competitor_id ? 'warning' : 'primary'"
+                @click="callSkater(skater.competitor_id, skater.first_name, skater.last_name)"
+                :disabled="isVotingOpen && currentCompetitorId !== skater.competitor_id"
               >
-                {{ currentCompetitorId === skater.competitor_id ? 'On Course' : 'Call to Screen' }}
+                {{ currentCompetitorId === skater.competitor_id ? '🔄 Re-Call' : 'Call' }}
               </button>
             </li>
           </ul>
@@ -223,10 +228,10 @@
           <h3>On Course: {{ currentSkaterName }} (Run {{ currentRunNumber }})</h3>
         </div>
         <div class="input-row">
-          <button class="btn warning large" @click="openVoting" :disabled="isVotingOpen">
-            {{ isVotingOpen ? 'Voting is Open' : '1. Open Voting' }}
+          <button class="btn warning large" @click="openVoting" :disabled="isVotingOpen || finalScore !== null">
+            {{ isVotingOpen ? 'Voting is Open' : (finalScore !== null ? '✔ Run Scored' : '1. Open Voting') }}
           </button>
-          <button class="btn danger large" @click="markDNS" :disabled="isVotingOpen">☠️ 2. Mark DNS</button>
+          <button class="btn danger large" @click="markDNS" :disabled="isVotingOpen || finalScore !== null">☠️ 2. Mark DNS</button>
         </div>
       </div>
 
@@ -236,14 +241,14 @@
           <div>
             <label>Acting as:</label>
             <select v-model.number="organizerJudgeId">
-              <option v-for="i in judgeCount" :key="i" :value="i" :disabled="receivedScores.includes(i)">
-                Judge {{ i }} {{ receivedScores.includes(i) ? '(Voted)' : '' }}
+              <option v-for="i in judgeCount" :key="i" :value="i">
+                Judge {{ i }}
               </option>
             </select>
           </div>
           <div>
             <label>Score (0 - 100):</label>
-            <input v-model.number="organizerScore" type="number" min="0" max="100" step="1" />
+            <input v-model.number="organizerScore" type="number" min="0" max="100" step="0.1" />
           </div>
           <button class="btn primary" @click="submitOrganizerScore">Submit Score</button>
         </div>
@@ -276,7 +281,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue';
 
 const isDarkMode = ref(localStorage.getItem('control_room_theme') === 'dark');
 
@@ -290,8 +295,8 @@ const isVotingOpen = ref(localStorage.getItem('is_voting_open') === 'true');
 const competitionId = ref(parseInt(localStorage.getItem('comp_id')) || null);
 const competitionName = ref(localStorage.getItem('comp_name') || '');
 const judgeCount = ref(parseInt(localStorage.getItem('judge_count')) || 3);
-const liveLeaderboard = ref(JSON.parse(localStorage.getItem('leaderboard') || '[]'));
 const registeredSkaters = ref(JSON.parse(localStorage.getItem('skaters') || '[]'));
+const liveLeaderboard = ref([]);
 
 const saveState = () => {
   localStorage.setItem('is_live', isLive.value);
@@ -299,12 +304,27 @@ const saveState = () => {
   localStorage.setItem('comp_id', competitionId.value || '');
   localStorage.setItem('comp_name', competitionName.value);
   localStorage.setItem('judge_count', judgeCount.value);
-  localStorage.setItem('leaderboard', JSON.stringify(liveLeaderboard.value));
   localStorage.setItem('skaters', JSON.stringify(registeredSkaters.value));
 };
 
-const quitLiveMode = () => {
+const forceResetLiveState = async () => {
+  isVotingOpen.value = false;
+  currentCompetitorId.value = null;
+  currentSkaterName.value = '';
+  receivedScores.value = [];
+  finalScore.value = null;
+  organizerScore.value = 50.0;
+  organizerJudgeId.value = 1;
+  saveState();
+  await nextTick();
+};
+
+const quitLiveMode = async () => {
   if (confirm("Are you sure you want to exit Live Mode and return to the Setup / Sandbox phase?")) {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ action: "cancel_voting" }));
+    }
+    await forceResetLiveState();
     isLive.value = false;
     saveState();
   }
@@ -348,8 +368,37 @@ const unassignedSkaters = computed(() => {
   return categorySkaters.filter(s => !assignedIds.includes(s.id));
 });
 
+const refreshLiveLeaderboard = async () => {
+  if (!competitionId.value || !selectedCategoryId.value || !selectedPhase.value) return;
+  try {
+    const response = await fetch(`/competitions/${competitionId.value}/categories/${selectedCategoryId.value}/rankings/?phase=${selectedPhase.value}`);
+    if (response.ok) {
+      const rankings = await response.json();
+      const catName = categories.value.find(c => c.id === selectedCategoryId.value)?.name || '';
+
+      liveLeaderboard.value = rankings.map(r => ({
+        id: r.competitor_id,
+        name: `${r.first_name} ${r.last_name}`,
+        score: r.best_score,
+        nationality: r.nationality,
+        category: catName
+      }));
+
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ action: "update_leaderboard", leaderboard: liveLeaderboard.value }));
+      }
+    }
+  } catch (error) { console.error(error); }
+};
+
 onMounted(async () => {
+  if (isLive.value && (isVotingOpen.value || currentCompetitorId.value)) {
+    console.warn("Recovering from stuck state on mount...");
+    await forceResetLiveState();
+  }
+
   if (isLive.value) startLiveEvent();
+
   try {
     const response = await fetch('/competitions/');
     if (response.ok) existingCompetitions.value = await response.json();
@@ -407,9 +456,13 @@ const fetchCategories = async () => {
 const fetchPools = async () => {
   if (!competitionId.value || !selectedCategoryId.value || !selectedPhase.value) return;
   try {
-    const response = await fetch(`/competitions/${competitionId.value}/categories/${selectedCategoryId.value}/pools/?phase=${selectedPhase.value}`);
+    const runParam = isLive.value ? `&run_number=${currentRunNumber.value}` : '';
+    const response = await fetch(`/competitions/${competitionId.value}/categories/${selectedCategoryId.value}/pools/?phase=${selectedPhase.value}${runParam}`);
     if (response.ok) {
       pools.value = await response.json();
+      if (isLive.value) {
+        await refreshLiveLeaderboard();
+      }
     }
   } catch (error) { console.error(error); }
 };
@@ -534,7 +587,8 @@ const addSkaterManually = async () => {
   } catch (error) { console.error(error); }
 };
 
-const startLiveEvent = () => {
+const startLiveEvent = async () => {
+  await forceResetLiveState();
   isLive.value = true;
   saveState();
   const serverIp = window.location.hostname || "127.0.0.1";
@@ -546,15 +600,19 @@ const startLiveEvent = () => {
       judge_count: judgeCount.value,
       competition_name: competitionName.value
     }));
-    if (liveLeaderboard.value.length > 0) {
-      socket.send(JSON.stringify({ action: "update_leaderboard", leaderboard: liveLeaderboard.value }));
-    }
+    refreshLiveLeaderboard();
   };
 
-  socket.onmessage = (event) => {
+  socket.onmessage = async (event) => {
     try {
       const payload = JSON.parse(event.data);
-      if (payload.type === 'voting_opened') {
+      if (payload.type === 'new_run') {
+        if (payload.previous_scores) {
+          receivedScores.value = Object.keys(payload.previous_scores).map(Number);
+        } else {
+          receivedScores.value = [];
+        }
+      } else if (payload.type === 'voting_opened') {
         isVotingOpen.value = true;
         saveState();
       } else if (payload.type === 'score_received') {
@@ -562,46 +620,34 @@ const startLiveEvent = () => {
         const nextUnvoted = Array.from({length: judgeCount.value}, (_, i) => i + 1).find(id => !receivedScores.value.includes(id));
         if (nextUnvoted) organizerJudgeId.value = nextUnvoted;
       } else if (payload.type === 'run_completed') {
+        if (payload.is_cancelled) {
+          await forceResetLiveState();
+          await fetchPools();
+          return;
+        }
+
         finalScore.value = payload.final_score;
         isVotingOpen.value = false;
-
-        const skater = registeredSkaters.value.find(s => s.id === currentCompetitorId.value);
-        const name = skater ? `${skater.first_name} ${skater.last_name}` : `ID #${currentCompetitorId.value}`;
 
         if (payload.is_dns || payload.final_score < 0) {
             finalScore.value = -1.0;
         }
 
-        const existingIndex = liveLeaderboard.value.findIndex(s => s.id === currentCompetitorId.value);
-
-        if (existingIndex !== -1) {
-            if (payload.final_score > liveLeaderboard.value[existingIndex].score) {
-                liveLeaderboard.value[existingIndex].score = payload.final_score;
-            }
-        } else {
-            liveLeaderboard.value.push({ id: currentCompetitorId.value, name: name, score: payload.final_score, category: skater.category, nationality: skater.nationality });
-        }
-        liveLeaderboard.value.sort((a, b) => b.score - a.score);
-        saveState();
-        if (socket && socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ action: "update_leaderboard", leaderboard: liveLeaderboard.value }));
-        }
+        await refreshLiveLeaderboard();
+        await fetchPools(); // Rafraîchit les pastilles de score dans la poule en temps réel
       }
     } catch (error) {}
   };
   socket.onclose = () => { setTimeout(startLiveEvent, 2000); };
 };
 
-const callSkaterDirectly = (skaterId, firstName, lastName) => {
+const callSkater = async (skaterId, firstName, lastName) => {
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
+  await forceResetLiveState();
 
   currentCompetitorId.value = skaterId;
   currentSkaterName.value = `${firstName} ${lastName}`;
-  receivedScores.value = [];
-  finalScore.value = null;
-  organizerScore.value = 50.0;
-  organizerJudgeId.value = 1;
-  isVotingOpen.value = false;
 
   saveState();
 
@@ -627,7 +673,7 @@ const openVoting = () => {
 
 const markDNS = () => {
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
-  if (confirm(`CRITICAL ACTION: Are you sure you want to disqualify ${currentSkaterName.value} (DNS)? This will assign a score of -1.0 for this run.`)) {
+  if (confirm(`CRITICAL ACTION: Are you sure you want to disqualify ${currentSkaterName.value} (DNS)?`)) {
     isVotingOpen.value = false;
     saveState();
     socket.send(JSON.stringify({ action: "dns_skater" }));
@@ -641,11 +687,12 @@ const triggerPodium = () => {
 
 const submitOrganizerScore = () => {
   if (!socket || socket.readyState !== WebSocket.OPEN || !isLive.value) return;
-  if (receivedScores.value.includes(organizerJudgeId.value)) return;
-
   socket.send(JSON.stringify({ action: 'submit_score', judge_id: organizerJudgeId.value, score: organizerScore.value }));
-  organizerScore.value = 50.0;
 };
+
+watch(currentRunNumber, () => {
+  if (isLive.value) fetchPools();
+});
 
 onUnmounted(() => { if (socket) socket.close(); });
 </script>
@@ -701,6 +748,10 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .score-display { font-size: 4rem; font-weight: bold; color: #e65100; }
 .active-call-info { background: #1976d2; color: white; padding: 15px; border-radius: 8px; margin-top: 20px; }
 .active-call-info h3 { margin: 0; font-size: 1.5rem; }
+
+.skater-name-block { display: flex; align-items: center; gap: 8px; }
+.inline-score-badge { background-color: #4caf50; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; }
+.inline-score-badge.dns-badge-small { background-color: #d32f2f; }
 
 .control-room.dark-theme { background-color: #121212; color: #e0e0e0; }
 .dark-theme .card { background: #1e1e1e; box-shadow: 0 2px 8px rgba(0,0,0,0.5); }
