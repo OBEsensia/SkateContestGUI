@@ -160,12 +160,21 @@
       <hr style="margin: 30px 0;" />
 
       <h2>3. Start Live Event</h2>
-      <div class="form-group">
-        <label>Number of Judges:</label>
-        <select v-model="judgeCount" @change="saveState">
-          <option :value="3">3 Judges</option>
-          <option :value="5">5 Judges</option>
-        </select>
+      <div class="live-start-options">
+        <div class="form-group">
+          <label>Number of Judges:</label>
+          <select v-model="judgeCount" @change="saveState">
+            <option :value="3">3 Judges</option>
+            <option :value="5">5 Judges</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Max Runs per Skater:</label>
+          <select v-model="maxRuns" @change="saveState">
+            <option :value="2">2 Runs</option>
+            <option :value="3">3 Runs</option>
+          </select>
+        </div>
         <button class="btn danger large wide" @click="startLiveEvent" :disabled="!competitionId">GO LIVE</button>
       </div>
     </section>
@@ -191,7 +200,14 @@
         </div>
         <div class="form-group">
           <label>Current Run Number:</label>
-          <input v-model.number="currentRunNumber" type="number" min="1" max="3" />
+          <input v-model.number="currentRunNumber" type="number" min="1" :max="maxRuns" />
+        </div>
+        <div class="form-group">
+          <label>Phase Total Runs:</label>
+          <select v-model="maxRuns">
+            <option :value="2">2 Runs</option>
+            <option :value="3">3 Runs</option>
+          </select>
         </div>
       </div>
 
@@ -295,6 +311,7 @@ const isVotingOpen = ref(localStorage.getItem('is_voting_open') === 'true');
 const competitionId = ref(parseInt(localStorage.getItem('comp_id')) || null);
 const competitionName = ref(localStorage.getItem('comp_name') || '');
 const judgeCount = ref(parseInt(localStorage.getItem('judge_count')) || 3);
+const maxRuns = ref(parseInt(localStorage.getItem('max_runs')) || 3);
 const registeredSkaters = ref(JSON.parse(localStorage.getItem('skaters') || '[]'));
 const liveLeaderboard = ref([]);
 
@@ -304,6 +321,7 @@ const saveState = () => {
   localStorage.setItem('comp_id', competitionId.value || '');
   localStorage.setItem('comp_name', competitionName.value);
   localStorage.setItem('judge_count', judgeCount.value);
+  localStorage.setItem('max_runs', maxRuns.value);
   localStorage.setItem('skaters', JSON.stringify(registeredSkaters.value));
 };
 
@@ -380,6 +398,7 @@ const refreshLiveLeaderboard = async () => {
         id: r.competitor_id,
         name: `${r.first_name} ${r.last_name}`,
         score: r.best_score,
+        run_scores: r.run_scores,
         nationality: r.nationality,
         category: catName
       }));
@@ -598,6 +617,7 @@ const startLiveEvent = async () => {
     socket.send(JSON.stringify({
       action: "start_live",
       judge_count: judgeCount.value,
+      max_runs: maxRuns.value,
       competition_name: competitionName.value
     }));
     refreshLiveLeaderboard();
@@ -634,7 +654,7 @@ const startLiveEvent = async () => {
         }
 
         await refreshLiveLeaderboard();
-        await fetchPools(); // Rafraîchit les pastilles de score dans la poule en temps réel
+        await fetchPools();
       }
     } catch (error) {}
   };
@@ -694,6 +714,13 @@ watch(currentRunNumber, () => {
   if (isLive.value) fetchPools();
 });
 
+watch(maxRuns, () => {
+  saveState();
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ action: "update_meta", max_runs: maxRuns.value }));
+  }
+});
+
 onUnmounted(() => { if (socket) socket.close(); });
 </script>
 
@@ -708,7 +735,8 @@ onUnmounted(() => { if (socket) socket.close(); });
 .card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 20px; }
 .card-inner { background-color: #f9f9f9; border: 1px solid #ddd; padding: 15px; border-radius: 6px; margin-bottom: 20px; }
 
-.sandbox-filters, .live-context-bar { display: flex; gap: 20px; background: #e3f2fd; padding: 15px; border-radius: 8px; margin-bottom: 20px; align-items: flex-end; }
+.live-start-options { display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap; }
+.sandbox-filters, .live-context-bar { display: flex; gap: 20px; background: #e3f2fd; padding: 15px; border-radius: 8px; margin-bottom: 20px; align-items: flex-end; flex-wrap: wrap; }
 .pool-controls { display: flex; gap: 10px; margin-bottom: 20px; }
 .pools-grid, .live-pools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
 .pool-card { background: #fff; border: 1px solid #ccc; border-radius: 6px; padding: 15px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }
