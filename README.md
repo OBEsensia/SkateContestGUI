@@ -28,6 +28,15 @@ A real-time, local-network web application designed to manage skateboarding comp
 
 ---
 
+### ⚡ Advanced Tournament Features
+
+* **Smart Heat Generation & Drag-and-Drop:** In the Sandbox, use the **Auto-Generate Initial Heats** button to mathematically distribute unassigned skaters into optimal heats (prioritizing groups of 3 or 4) based on their registration order. Need to make a last-minute adjustment? Simply **drag and drop** a skater's name across pool cards to instantly reassign them.
+* **Dynamic Run Limits:** Tailor the contest format to your needs. Before going live, configure the maximum number of runs (2 or 3) for the active phase. The Public Score Board and the Excel exports will automatically adapt their layout and columns to match the selected format.
+* **Smart Re-Call System:** Mistakes happen in live events. If you accidentally close a voting session or need a skater to redo a run, the **🔄 Re-Call** button safely resets the current run. It automatically retrieves and restores the judges' previously entered scores on their tablets, saving time and preventing data loss.
+* **Magnified Podium Leaderboard:** Celebrating the winners is essential, but acknowledging every competitor's effort is just as important. The final Podium view now includes a magnified, comprehensive leaderboard displayed directly below the Top 3 to properly close out the competition.
+
+---
+
 ## 📐 Core Algorithm Logic
 
 ### Leaderboard Sorting & Start Order
@@ -51,6 +60,7 @@ The setup phase allows the organizer to create events, configure the number of j
 * ![Control Room Phase 1a](doc/ControlRoom_Phase1_a.png)
 * ![Control Room Phase 1b](doc/ControlRoom_Phase1_b.png)
 * ![Skater Enrollment](doc/ControlRoom_Phase1_Skaters_enroll.png)
+* ![Heat generation](doc/ControlRoom_Phase1_Heats_autogen.png)
 
 **Phase 2: Live Competition Control**
 The live dashboard controls the flow of the contest, pushing states to the judges and the public screen.
