@@ -59,6 +59,7 @@ The live dashboard controls the flow of the contest, pushing states to the judge
 * ![Voting Started](doc/ControlRoom_Phase2_voting_start.png)
 * ![Manual Entry Backup](doc/ControlRoom_Phase2_voting_manual_entry.png)
 * ![Voting Ended](doc/ControlRoom_Phase2_voting_end.png)
+* ![Note History](doc/Notes_history.png)
 
 ### 2. Judge Pad (Tablets)
 A distraction-free, dark-themed interface for the judges to evaluate skaters efficiently.
@@ -72,6 +73,7 @@ A distraction-free, dark-themed interface for the judges to evaluate skaters eff
 A responsive, high-contrast display designed for projectors and LED walls.
 * ![Waiting for Event](doc/leaderboard_waiting.png)
 * ![Run in Progress](doc/leaderboard_run_in_progress.png)
+* ![Voting Start](doc/leaderboard_voting_start.png)
 * ![Voting Progress](doc/leaderboard_voting_2-3.png)
 * ![Voting End & Leaderboard Update](doc/leaderboard_voting_end_and_leaderboard.png)
 * ![Podium](doc/leaderboard_podium.png)
