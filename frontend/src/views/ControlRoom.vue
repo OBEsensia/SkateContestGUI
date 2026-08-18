@@ -109,18 +109,32 @@
       </div>
 
       <div v-if="selectedCategoryId && selectedPhase" class="sandbox-workspace">
-        <div class="pool-controls">
-          <input v-model="newPoolName" type="text" placeholder="New Pool Name (e.g. Heat 1)" />
-          <button class="btn primary" @click="createNewPool">+ Create Pool</button>
+        <div class="pool-controls" style="display: flex; justify-content: space-between; align-items: center;">
+          <div style="display: flex; gap: 10px;">
+            <input v-model="newPoolName" type="text" placeholder="New Pool Name (e.g. Heat 1)" />
+            <button class="btn primary" @click="createNewPool">+ Create Pool</button>
+          </div>
+
+          <button v-if="selectedPhase === 'Qualifications'" class="btn warning" @click="autoGenerateQualifs">
+            ⚡ Auto-Generate Initial Heats
+          </button>
         </div>
 
+        <p class="drag-instruction">💡 Pro-tip: You can drag and drop skaters between pools!</p>
+
         <div class="pools-grid">
-          <div class="pool-card unassigned-pool">
+          <!-- Unassigned Pool (Drag & Drop Target) -->
+          <div class="pool-card unassigned-pool"
+               @dragover.prevent
+               @drop="onDrop($event, null)">
             <h3>Unassigned Skaters ({{ unassignedSkaters.length }})</h3>
             <ul class="skater-assign-list">
-              <li v-for="skater in unassignedSkaters" :key="skater.id">
-                <span>{{ skater.first_name }} {{ skater.last_name }}</span>
-                <select @change="assignSkater(skater.id, $event.target.value)">
+              <li v-for="skater in unassignedSkaters" :key="skater.id"
+                  draggable="true"
+                  @dragstart="onDragStart($event, skater.id)"
+                  class="draggable-item">
+                <span>≡ {{ skater.first_name }} {{ skater.last_name }}</span>
+                <select @change="assignSkater(skater.id, $event.target.value)" @click.stop>
                   <option value="" disabled selected>Assign to...</option>
                   <option v-for="pool in pools" :key="pool.id" :value="pool.id">{{ pool.name }}</option>
                 </select>
@@ -129,13 +143,19 @@
             </ul>
           </div>
 
-          <div v-for="pool in pools" :key="pool.id" class="pool-card">
+          <!-- Assigned Pools (Drag & Drop Target) -->
+          <div v-for="pool in pools" :key="pool.id" class="pool-card"
+               @dragover.prevent
+               @drop="onDrop($event, pool.id)">
             <h3>{{ pool.name }} ({{ pool.competitors.length }})</h3>
             <ul class="skater-assign-list">
-              <li v-for="skater in pool.competitors" :key="skater.competitor_id">
-                <span>{{ skater.start_order }}. {{ skater.first_name }} {{ skater.last_name }}</span>
+              <li v-for="skater in pool.competitors" :key="skater.competitor_id"
+                  draggable="true"
+                  @dragstart="onDragStart($event, skater.competitor_id)"
+                  class="draggable-item">
+                <span>≡ {{ skater.start_order }}. {{ skater.first_name }} {{ skater.last_name }}</span>
               </li>
-              <li v-if="pool.competitors.length === 0" class="empty-list">Empty pool.</li>
+              <li v-if="pool.competitors.length === 0" class="empty-list">Empty pool. Drop skaters here.</li>
             </ul>
           </div>
         </div>
@@ -386,6 +406,39 @@ const unassignedSkaters = computed(() => {
   return categorySkaters.filter(s => !assignedIds.includes(s.id));
 });
 
+/* --- DRAG AND DROP LOGIC --- */
+const onDragStart = (event, skaterId) => {
+  event.dataTransfer.setData('skaterId', skaterId);
+  event.target.style.opacity = '0.5';
+};
+
+const onDrop = async (event, targetPoolId) => {
+  event.target.style.opacity = '1';
+  const skaterId = event.dataTransfer.getData('skaterId');
+  if (!skaterId) return;
+
+  if (targetPoolId === null) {
+    await unassignSkater(skaterId);
+  } else {
+    await assignSkater(skaterId, targetPoolId);
+  }
+};
+/* --------------------------- */
+
+const autoGenerateQualifs = async () => {
+  if (!competitionId.value || !selectedCategoryId.value) return;
+  if (!confirm("This will overwrite existing Qualification heats and auto-distribute skaters based on their registration order. Continue?")) return;
+
+  try {
+    const response = await fetch(`/competitions/${competitionId.value}/categories/${selectedCategoryId.value}/auto-qualifications/`, {
+      method: 'POST'
+    });
+    if (response.ok) {
+      await fetchPools();
+    }
+  } catch (error) { console.error(error); }
+};
+
 const refreshLiveLeaderboard = async () => {
   if (!competitionId.value || !selectedCategoryId.value || !selectedPhase.value) return;
   try {
@@ -430,6 +483,10 @@ onMounted(async () => {
       await fetchPools();
     }
   }
+
+  document.addEventListener('dragend', (e) => {
+    if (e.target && e.target.style) e.target.style.opacity = '1';
+  });
 });
 
 const loadCompetition = async () => {
@@ -519,6 +576,21 @@ const assignSkater = async (skaterId, poolId) => {
         pool_id: parseInt(poolId),
         competitor_id: skaterId,
         start_order: newOrder
+      })
+    });
+    if (response.ok) await fetchPools();
+  } catch (error) { console.error(error); }
+};
+
+const unassignSkater = async (skaterId) => {
+  if (!skaterId) return;
+  try {
+    const response = await fetch('/pools/unassign/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        competitor_id: parseInt(skaterId),
+        phase: selectedPhase.value
       })
     });
     if (response.ok) await fetchPools();
@@ -654,7 +726,7 @@ const startLiveEvent = async () => {
         }
 
         await refreshLiveLeaderboard();
-        await fetchPools();
+        await fetchPools(); // Rafraîchit les pastilles de score dans la poule en temps réel
       }
     } catch (error) {}
   };
@@ -721,7 +793,9 @@ watch(maxRuns, () => {
   }
 });
 
-onUnmounted(() => { if (socket) socket.close(); });
+onUnmounted(() => {
+  if (socket) socket.close();
+});
 </script>
 
 <style scoped>
@@ -739,11 +813,18 @@ onUnmounted(() => { if (socket) socket.close(); });
 .sandbox-filters, .live-context-bar { display: flex; gap: 20px; background: #e3f2fd; padding: 15px; border-radius: 8px; margin-bottom: 20px; align-items: flex-end; flex-wrap: wrap; }
 .pool-controls { display: flex; gap: 10px; margin-bottom: 20px; }
 .pools-grid, .live-pools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
-.pool-card { background: #fff; border: 1px solid #ccc; border-radius: 6px; padding: 15px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }
+.pool-card { background: #fff; border: 1px solid #ccc; border-radius: 6px; padding: 15px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); transition: background-color 0.3s ease; }
 .unassigned-pool { border: 2px dashed #ff9800; background: #fff3e0; }
 .pool-card h3 { margin-top: 0; padding-bottom: 10px; border-bottom: 1px solid #eee; font-size: 1.1rem; }
+
+/* Drag and Drop styling */
+.drag-instruction { font-style: italic; color: #1976d2; margin-bottom: 10px; font-size: 0.9rem; }
+.draggable-item { cursor: grab; padding: 8px; border: 1px solid transparent; transition: all 0.2s ease; border-radius: 4px; }
+.draggable-item:hover { background-color: #f0f0f0; border: 1px dashed #bbb; }
+.draggable-item:active { cursor: grabbing; opacity: 0.5; }
+
 .skater-assign-list { list-style: none; padding: 0; margin: 0; max-height: 250px; overflow-y: auto; }
-.skater-assign-list li { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #f0f0f0; font-size: 0.9rem; }
+.skater-assign-list li { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #f0f0f0; font-size: 0.9rem; }
 .skater-assign-list select { padding: 4px; font-size: 0.8rem; max-width: 100px; }
 .auto-generate-box { background: #e8f5e9; padding: 20px; border-radius: 8px; border: 1px solid #c8e6c9; }
 .horizontal { display: flex; flex-direction: row; align-items: center; gap: 10px; }
@@ -792,6 +873,7 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .dark-theme .pool-card { background: #2c2c2c; border-color: #444; }
 .dark-theme .unassigned-pool { border-color: #f57c00; background: #3e2723; }
 .dark-theme .skater-assign-list li { border-bottom-color: #444; }
+.dark-theme .draggable-item:hover { background-color: #3a3a3a; border-color: #666; }
 .dark-theme .auto-generate-box { background: #1b5e20; border-color: #2e7d32; }
 .dark-theme .active-skater { background-color: #4a401a; border-left-color: #ffd600; }
 .dark-theme .import-box, .dark-theme .manual-box { background: #2c2c2c; border-color: #444; }

@@ -26,6 +26,8 @@ from competition_manager import (
     import_competitors_from_excel,
     create_pool,
     assign_competitor_to_pool,
+    unassign_competitor_from_phase,
+    auto_generate_qualifications,
     get_pools_with_competitors,
     get_phase_ranking,
     generate_next_phase,
@@ -85,6 +87,11 @@ class PoolAssign(BaseModel):
     pool_id: int
     competitor_id: int
     start_order: int
+
+
+class PoolUnassign(BaseModel):
+    competitor_id: int
+    phase: str
 
 
 class GeneratePhaseRequest(BaseModel):
@@ -258,6 +265,37 @@ def assign_skater_to_pool(
         return {"status": "success"}
     except Exception as error:
         logger.error(f"Error assigning skater to pool: {error}")
+        raise HTTPException(status_code=500, detail="Database error")
+
+
+@app.post("/pools/unassign/")
+def unassign_skater_from_pool(
+        unassign_data: PoolUnassign,
+        db_conn: sqlite3.Connection = Depends(get_db_connection)
+) -> Dict[str, str]:
+    try:
+        unassign_competitor_from_phase(
+            db_conn,
+            competitor_id=unassign_data.competitor_id,
+            phase=unassign_data.phase
+        )
+        return {"status": "success"}
+    except Exception as error:
+        logger.error(f"Error unassigning skater: {error}")
+        raise HTTPException(status_code=500, detail="Database error")
+
+
+@app.post("/competitions/{competition_id}/categories/{category_id}/auto-qualifications/")
+def generate_auto_qualifications(
+        competition_id: int,
+        category_id: int,
+        db_conn: sqlite3.Connection = Depends(get_db_connection)
+) -> Dict[str, int]:
+    try:
+        pools_created = auto_generate_qualifications(db_conn, competition_id, category_id)
+        return {"pools_created": pools_created}
+    except Exception as error:
+        logger.error(f"Error auto generating qualifs: {error}")
         raise HTTPException(status_code=500, detail="Database error")
 
 
