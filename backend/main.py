@@ -266,7 +266,7 @@ def get_pools_for_category(
         competition_id: int,
         category_id: int,
         phase: str,
-        run_number: Optional[int] = None, # Paramètre optionnel ajouté
+        run_number: Optional[int] = None,
         db_conn: sqlite3.Connection = Depends(get_db_connection)
 ) -> List[Dict[str, Any]]:
     try:
@@ -341,7 +341,7 @@ class ConnectionManager:
         self.cached_podium: Dict[str, Any] = {}
         self.cached_leaderboard: Dict[str, Any] = {}
         self.received_scores: Dict[int, float] = {}
-        self.history_scores: Dict[str, Dict[int, float]] = {}  # Memoire persistante des notes par run
+        self.history_scores: Dict[str, Dict[int, float]] = {}
 
     async def connect(self, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -391,7 +391,8 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.send_json({
         "type": "board_meta",
         "competition_name": getattr(global_manager, "competition_name", "SKATE CONTEST"),
-        "judge_count": getattr(global_manager, "judge_count", 5)
+        "judge_count": getattr(global_manager, "judge_count", 5),
+        "max_runs": getattr(global_manager, "max_runs", 3)
     })
 
     try:
@@ -401,18 +402,27 @@ async def websocket_endpoint(websocket: WebSocket):
 
             if action == "start_live":
                 global_manager.judge_count = data.get("judge_count", 3)
+                global_manager.max_runs = data.get("max_runs", 3)
                 global_manager.competition_name = data.get("competition_name", "SKATE CONTEST")
                 await global_manager.broadcast_json({
                     "type": "board_meta",
                     "competition_name": global_manager.competition_name,
-                    "judge_count": global_manager.judge_count
+                    "judge_count": global_manager.judge_count,
+                    "max_runs": global_manager.max_runs
+                })
+
+            elif action == "update_meta":
+                if "max_runs" in data:
+                    global_manager.max_runs = data["max_runs"]
+                await global_manager.broadcast_json({
+                    "type": "board_meta",
+                    "competition_name": getattr(global_manager, "competition_name", "SKATE CONTEST"),
+                    "judge_count": getattr(global_manager, "judge_count", 3),
+                    "max_runs": getattr(global_manager, "max_runs", 3)
                 })
 
             elif action == "call_skater":
-                # 1. On vide les scores en cours pour obliger les juges a revalider
                 global_manager.received_scores = {}
-
-                # 2. On recupere les scores de l'historique si c'est un Re-Call
                 run_key = f"{data.get('competitor_id')}_{data.get('phase')}_{data.get('run_number')}"
                 previous_scores = global_manager.history_scores.get(run_key, {})
 
@@ -430,7 +440,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     "nationality": data.get("nationality", ""),
                     "phase": data.get("phase", "Qualifications"),
                     "run_number": data.get("run_number"),
-                    "previous_scores": previous_scores  # On envoie l'historique aux juges
+                    "previous_scores": previous_scores
                 })
 
             elif action == "open_voting":
@@ -451,7 +461,7 @@ async def websocket_endpoint(websocket: WebSocket):
             elif action == "dns_skater":
                 global_manager.received_scores = {}
                 run_key = f"{global_manager.cached_run.get('competitor_id')}_{global_manager.cached_run.get('phase')}_{global_manager.cached_run.get('run_number')}"
-                global_manager.history_scores[run_key] = {}  # Purge de l'historique si on force le DNS
+                global_manager.history_scores[run_key] = {}
 
                 db_conn = get_connection()
                 cursor = db_conn.cursor()
@@ -479,10 +489,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 judge_id = data.get("judge_id")
                 score = data.get("score")
 
-                # Enregistrement dans la session en cours
                 global_manager.received_scores[judge_id] = score
 
-                # Mise a jour en temps reel de l'historique memoire
                 run_key = f"{global_manager.cached_run.get('competitor_id')}_{global_manager.cached_run.get('phase')}_{global_manager.cached_run.get('run_number')}"
                 if run_key not in global_manager.history_scores:
                     global_manager.history_scores[run_key] = {}
@@ -494,7 +502,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 })
 
                 current_judge_count = getattr(global_manager, "judge_count", 3)
-                # Si TOUS les juges ont (re)valide leur note...
                 if len(global_manager.received_scores) >= current_judge_count:
                     final_score = sum(global_manager.received_scores.values()) / current_judge_count
 
