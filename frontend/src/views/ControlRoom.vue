@@ -3,15 +3,22 @@
     <header class="header">
       <h1>Skate Contest - Control Room</h1>
       <div class="header-controls">
+        <button class="btn success small" @click="downloadResults" v-if="competitionId">
+          📥 Export Results
+        </button>
         <button class="btn-theme" @click="toggleTheme">
           {{ isDarkMode ? '☀️ Light' : '🌙 Dark' }}
+        </button>
+        <button class="btn warning small" v-if="isLive" @click="quitLiveMode">
+          ⏹️ EXIT LIVE
         </button>
         <div v-if="isLive" class="live-indicator">🔴 LIVE</div>
       </div>
     </header>
 
     <section v-if="!isLive" class="setup-section card">
-      <h2>1. Event Setup</h2>
+      <h2>1. Event Setup & Registration</h2>
+
       <div v-if="!competitionId" class="setup-options">
         <div class="form-group load-box" v-if="existingCompetitions.length > 0">
           <h3>Load Existing Competition</h3>
@@ -52,7 +59,15 @@
             <div class="input-row-small">
               <input v-model="newSkaterFirstName" type="text" placeholder="First Name" />
               <input v-model="newSkaterLastName" type="text" placeholder="Last Name" />
-              <input v-model.number="newSkaterBib" type="number" placeholder="Bib (e.g. 42)" />
+              <select v-model="newSkaterCategory">
+                <option value="U12 Boy">U12 Boy</option>
+                <option value="U12 Girl">U12 Girl</option>
+                <option value="U15 Boy">U15 Boy</option>
+                <option value="U15 Girl">U15 Girl</option>
+                <option value="Open Boy">Open Boy</option>
+                <option value="Open Girl">Open Girl</option>
+              </select>
+              <input v-model="newSkaterNationality" type="text" placeholder="Nationality (e.g. FRA)" maxlength="3" />
               <button class="btn primary" @click="addSkaterManually">Add Skater</button>
             </div>
             <div v-if="manualAddMessage" class="info-message">{{ manualAddMessage }}</div>
@@ -63,72 +78,213 @@
           <h3>Registered Skaters ({{ registeredSkaters.length }})</h3>
           <ul class="skaters-list">
             <li v-for="skater in registeredSkaters" :key="skater.id">
-              <strong>#{{ skater.bib_number }}</strong> - {{ skater.first_name }} {{ skater.last_name }}
+              <strong>{{ skater.first_name }} {{ skater.last_name }}</strong>
+              - {{ skater.category }} ({{ skater.nationality }})
             </li>
             <li v-if="registeredSkaters.length === 0" class="empty-list">No skaters registered yet.</li>
           </ul>
         </div>
-        <hr />
-        <h2>2. Start Live Event</h2>
+      </div>
+    </section>
+
+    <section v-if="competitionId && !isLive" class="sandbox-section card">
+      <h2>2. Tournament Sandbox (Pools & Heats)</h2>
+
+      <div class="sandbox-filters">
+        <div class="form-group">
+          <label>Category:</label>
+          <select v-model="selectedCategoryId" @change="fetchPools">
+            <option disabled value="">-- Select Category --</option>
+            <option v-for="cat in categories" :key="cat.id" :value="cat.id">{{ cat.name }}</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Phase:</label>
+          <select v-model="selectedPhase" @change="fetchPools">
+            <option value="Qualifications">Qualifications</option>
+            <option value="Semi-Final">Semi-Final</option>
+            <option value="Final">Final</option>
+          </select>
+        </div>
+      </div>
+
+      <div v-if="selectedCategoryId && selectedPhase" class="sandbox-workspace">
+        <div class="pool-controls" style="display: flex; justify-content: space-between; align-items: center;">
+          <div style="display: flex; gap: 10px;">
+            <input v-model="newPoolName" type="text" placeholder="New Pool Name (e.g. Heat 1)" />
+            <button class="btn primary" @click="createNewPool">+ Create Pool</button>
+          </div>
+
+          <button v-if="selectedPhase === 'Qualifications'" class="btn warning" @click="autoGenerateQualifs">
+            ⚡ Auto-Generate Initial Heats
+          </button>
+        </div>
+
+        <p class="drag-instruction">💡 Pro-tip: You can drag and drop skaters between pools!</p>
+
+        <div class="pools-grid">
+          <!-- Unassigned Pool (Drag & Drop Target) -->
+          <div class="pool-card unassigned-pool"
+               @dragover.prevent
+               @drop="onDrop($event, null)">
+            <h3>Unassigned Skaters ({{ unassignedSkaters.length }})</h3>
+            <ul class="skater-assign-list">
+              <li v-for="skater in unassignedSkaters" :key="skater.id"
+                  draggable="true"
+                  @dragstart="onDragStart($event, skater.id)"
+                  class="draggable-item">
+                <span>≡ {{ skater.first_name }} {{ skater.last_name }}</span>
+                <select @change="assignSkater(skater.id, $event.target.value)" @click.stop>
+                  <option value="" disabled selected>Assign to...</option>
+                  <option v-for="pool in pools" :key="pool.id" :value="pool.id">{{ pool.name }}</option>
+                </select>
+              </li>
+              <li v-if="unassignedSkaters.length === 0" class="empty-list">All skaters assigned!</li>
+            </ul>
+          </div>
+
+          <!-- Assigned Pools (Drag & Drop Target) -->
+          <div v-for="pool in pools" :key="pool.id" class="pool-card"
+               @dragover.prevent
+               @drop="onDrop($event, pool.id)">
+            <h3>{{ pool.name }} ({{ pool.competitors.length }})</h3>
+            <ul class="skater-assign-list">
+              <li v-for="skater in pool.competitors" :key="skater.competitor_id"
+                  draggable="true"
+                  @dragstart="onDragStart($event, skater.competitor_id)"
+                  class="draggable-item">
+                <span>≡ {{ skater.start_order }}. {{ skater.first_name }} {{ skater.last_name }}</span>
+              </li>
+              <li v-if="pool.competitors.length === 0" class="empty-list">Empty pool. Drop skaters here.</li>
+            </ul>
+          </div>
+        </div>
+
+        <hr style="margin: 20px 0;" />
+
+        <div class="auto-generate-box">
+          <h3>Auto-Generate Next Phase</h3>
+          <p>Takes the Top N from the current phase, reverses their order, and distributes them into new pools.</p>
+          <div class="input-row-small horizontal">
+            <select v-model="genNextPhase">
+              <option value="Semi-Final">To Semi-Final</option>
+              <option value="Final">To Final</option>
+            </select>
+            <input v-model.number="genTopN" type="number" placeholder="Top N (e.g. 16)" title="Top N Skaters to Qualify" />
+            <input v-model.number="genPoolCount" type="number" placeholder="Pools (e.g. 4)" title="Number of Pools to Create" />
+            <button class="btn warning" @click="generateNextPhase">⚡ Generate</button>
+          </div>
+        </div>
+      </div>
+
+      <hr style="margin: 30px 0;" />
+
+      <h2>3. Start Live Event</h2>
+      <div class="live-start-options">
         <div class="form-group">
           <label>Number of Judges:</label>
           <select v-model="judgeCount" @change="saveState">
             <option :value="3">3 Judges</option>
             <option :value="5">5 Judges</option>
           </select>
-          <button class="btn danger large" @click="startLiveEvent">GO LIVE</button>
         </div>
+        <div class="form-group">
+          <label>Max Runs per Skater:</label>
+          <select v-model="maxRuns" @change="saveState">
+            <option :value="2">2 Runs</option>
+            <option :value="3">3 Runs</option>
+          </select>
+        </div>
+        <button class="btn danger large wide" @click="startLiveEvent" :disabled="!competitionId">GO LIVE</button>
       </div>
     </section>
 
-    <!-- PHASE 2: LIVE CONTROL DASHBOARD -->
-    <section v-else class="live-section card">
+    <section v-if="isLive" class="live-section card">
       <h2>Live Control Dashboard</h2>
 
-      <div class="call-skater-panel">
-        <div class="input-row">
-          <div>
-            <label>Competitor Bib Number:</label>
-            <input v-model.number="currentCompetitorId" type="number" min="1" />
-          </div>
-          <div>
-            <label>Run Number:</label>
-            <input v-model.number="currentRunNumber" type="number" min="1" max="3" />
-          </div>
-          <!-- Bouton Étape 1 -->
-          <button class="btn primary" @click="callNextSkater">1. Call Skater (On Course)</button>
-
-          <!-- Bouton Étape 2 (Se désactive dès qu'on clique dessus) -->
-          <button
-            class="btn warning"
-            @click="openVoting"
-            :disabled="!currentCompetitorId || isVotingOpen"
-          >
-            {{ isVotingOpen ? 'Voting is Open' : '2. Open Voting' }}
-          </button>
+      <div class="live-context-bar">
+        <div class="form-group">
+          <label>Active Category:</label>
+          <select v-model="selectedCategoryId" @change="fetchPools">
+            <option disabled value="">-- Select Category --</option>
+            <option v-for="cat in categories" :key="cat.id" :value="cat.id">{{ cat.name }}</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Active Phase:</label>
+          <select v-model="selectedPhase" @change="fetchPools">
+            <option value="Qualifications">Qualifications</option>
+            <option value="Semi-Final">Semi-Final</option>
+            <option value="Final">Final</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Current Run Number:</label>
+          <input v-model.number="currentRunNumber" type="number" min="1" :max="maxRuns" />
+        </div>
+        <div class="form-group">
+          <label>Phase Total Runs:</label>
+          <select v-model="maxRuns">
+            <option :value="2">2 Runs</option>
+            <option :value="3">3 Runs</option>
+          </select>
         </div>
       </div>
 
-      <!-- Panneau de saisie Organisateur affiché SEULEMENT si les votes sont ouverts -->
+      <div v-if="pools.length > 0" class="live-pools-grid">
+        <div v-for="pool in pools" :key="pool.id" class="pool-card live-pool-card">
+          <h3>{{ pool.name }}</h3>
+          <ul class="skater-assign-list">
+            <li v-for="skater in pool.competitors" :key="skater.competitor_id"
+                :class="{ 'active-skater': currentCompetitorId === skater.competitor_id }">
+              <span class="skater-name-block">
+                {{ skater.start_order }}. {{ skater.first_name }} {{ skater.last_name }}
+                <span v-if="skater.current_run_score !== null && skater.current_run_score !== undefined"
+                      class="inline-score-badge"
+                      :class="{ 'dns-badge-small': skater.current_run_score < 0 }">
+                  {{ skater.current_run_score < 0 ? 'DNS' : skater.current_run_score.toFixed(1) }}
+                </span>
+              </span>
+              <button
+                class="btn small"
+                :class="currentCompetitorId === skater.competitor_id ? 'warning' : 'primary'"
+                @click="callSkater(skater.competitor_id, skater.first_name, skater.last_name)"
+                :disabled="isVotingOpen && currentCompetitorId !== skater.competitor_id"
+              >
+                {{ currentCompetitorId === skater.competitor_id ? '🔄 Re-Call' : 'Call' }}
+              </button>
+            </li>
+          </ul>
+        </div>
+      </div>
+      <div v-else class="info-message">No pools found for this category and phase. Please set them up in the Sandbox.</div>
+
+      <div class="call-skater-panel" v-if="currentCompetitorId">
+        <div class="active-call-info">
+          <h3>On Course: {{ currentSkaterName }} (Run {{ currentRunNumber }})</h3>
+        </div>
+        <div class="input-row">
+          <button class="btn warning large" @click="openVoting" :disabled="isVotingOpen || finalScore !== null">
+            {{ isVotingOpen ? 'Voting is Open' : (finalScore !== null ? '✔ Run Scored' : '1. Open Voting') }}
+          </button>
+          <button class="btn danger large" @click="markDNS" :disabled="isVotingOpen || finalScore !== null">☠️ 2. Mark DNS</button>
+        </div>
+      </div>
+
       <div v-if="currentCompetitorId && isVotingOpen && finalScore === null" class="organizer-judge-panel card-inner">
         <h3>Direct Judge Input (Organizer Backup)</h3>
         <div class="input-row">
           <div>
             <label>Acting as:</label>
             <select v-model.number="organizerJudgeId">
-              <option
-                v-for="i in judgeCount"
-                :key="i"
-                :value="i"
-                :disabled="receivedScores.includes(i)"
-              >
-                Judge {{ i }} {{ receivedScores.includes(i) ? '(Voted)' : '' }}
+              <option v-for="i in judgeCount" :key="i" :value="i">
+                Judge {{ i }}
               </option>
             </select>
           </div>
           <div>
-            <label>Score (0 - 10):</label>
-            <input v-model.number="organizerScore" type="number" min="0.0" max="10.0" step="0.1" />
+            <label>Score (0 - 100):</label>
+            <input v-model.number="organizerScore" type="number" min="0" max="100" step="0.1" />
           </div>
           <button class="btn primary" @click="submitOrganizerScore">Submit Score</button>
         </div>
@@ -137,12 +293,7 @@
       <div class="voting-status-panel">
         <h3>Judges Status</h3>
         <div class="judges-grid">
-          <div
-            v-for="i in judgeCount"
-            :key="i"
-            class="judge-indicator"
-            :class="{ 'voted': receivedScores.includes(i) }"
-          >
+          <div v-for="i in judgeCount" :key="i" class="judge-indicator" :class="{ 'voted': receivedScores.includes(i) }">
             Judge {{ i }}
           </div>
         </div>
@@ -150,7 +301,10 @@
 
       <div v-if="finalScore !== null" class="result-panel">
         <h3>Final Score for Run {{ currentRunNumber }}</h3>
-        <div class="score-display">{{ finalScore.toFixed(3) }}</div>
+        <div class="score-display">
+          <span v-if="finalScore < 0">DNS</span>
+          <span v-else>{{ finalScore.toFixed(2) }}</span>
+        </div>
       </div>
 
       <hr style="margin: 30px 0;" />
@@ -163,7 +317,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue';
 
 const isDarkMode = ref(localStorage.getItem('control_room_theme') === 'dark');
 
@@ -177,8 +331,9 @@ const isVotingOpen = ref(localStorage.getItem('is_voting_open') === 'true');
 const competitionId = ref(parseInt(localStorage.getItem('comp_id')) || null);
 const competitionName = ref(localStorage.getItem('comp_name') || '');
 const judgeCount = ref(parseInt(localStorage.getItem('judge_count')) || 3);
-const liveLeaderboard = ref(JSON.parse(localStorage.getItem('leaderboard') || '[]'));
+const maxRuns = ref(parseInt(localStorage.getItem('max_runs')) || 3);
 const registeredSkaters = ref(JSON.parse(localStorage.getItem('skaters') || '[]'));
+const liveLeaderboard = ref([]);
 
 const saveState = () => {
   localStorage.setItem('is_live', isLive.value);
@@ -186,8 +341,31 @@ const saveState = () => {
   localStorage.setItem('comp_id', competitionId.value || '');
   localStorage.setItem('comp_name', competitionName.value);
   localStorage.setItem('judge_count', judgeCount.value);
-  localStorage.setItem('leaderboard', JSON.stringify(liveLeaderboard.value));
+  localStorage.setItem('max_runs', maxRuns.value);
   localStorage.setItem('skaters', JSON.stringify(registeredSkaters.value));
+};
+
+const forceResetLiveState = async () => {
+  isVotingOpen.value = false;
+  currentCompetitorId.value = null;
+  currentSkaterName.value = '';
+  receivedScores.value = [];
+  finalScore.value = null;
+  organizerScore.value = 50.0;
+  organizerJudgeId.value = 1;
+  saveState();
+  await nextTick();
+};
+
+const quitLiveMode = async () => {
+  if (confirm("Are you sure you want to exit Live Mode and return to the Setup / Sandbox phase?")) {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ action: "cancel_voting" }));
+    }
+    await forceResetLiveState();
+    isLive.value = false;
+    saveState();
+  }
 };
 
 const existingCompetitions = ref([]);
@@ -196,40 +374,130 @@ const eventDate = ref('');
 const uploadMessage = ref('');
 const newSkaterFirstName = ref('');
 const newSkaterLastName = ref('');
-const newSkaterBib = ref('');
+const newSkaterCategory = ref('Open Boy');
+const newSkaterNationality = ref('FRA');
 const manualAddMessage = ref('');
 
+const categories = ref([]);
+const selectedCategoryId = ref('');
+const selectedPhase = ref('Qualifications');
+const pools = ref([]);
+const newPoolName = ref('');
+
+const genNextPhase = ref('Semi-Final');
+const genTopN = ref(16);
+const genPoolCount = ref(4);
+
 const currentCompetitorId = ref(null);
+const currentSkaterName = ref('');
 const currentRunNumber = ref(1);
 const receivedScores = ref([]);
 const finalScore = ref(null);
 
 const organizerJudgeId = ref(1);
-const organizerScore = ref(5.0);
+const organizerScore = ref(50.0);
 
 let socket = null;
 
-onMounted(async () => {
-  if (isLive.value) {
-    startLiveEvent();
+const unassignedSkaters = computed(() => {
+  if (!selectedCategoryId.value) return [];
+  const categorySkaters = registeredSkaters.value.filter(s => s.category_id === selectedCategoryId.value);
+  const assignedIds = pools.value.flatMap(p => p.competitors.map(c => c.competitor_id));
+  return categorySkaters.filter(s => !assignedIds.includes(s.id));
+});
+
+/* --- DRAG AND DROP LOGIC --- */
+const onDragStart = (event, skaterId) => {
+  event.dataTransfer.setData('skaterId', skaterId);
+  event.target.style.opacity = '0.5';
+};
+
+const onDrop = async (event, targetPoolId) => {
+  event.target.style.opacity = '1';
+  const skaterId = event.dataTransfer.getData('skaterId');
+  if (!skaterId) return;
+
+  if (targetPoolId === null) {
+    await unassignSkater(skaterId);
+  } else {
+    await assignSkater(skaterId, targetPoolId);
   }
+};
+/* --------------------------- */
+
+const autoGenerateQualifs = async () => {
+  if (!competitionId.value || !selectedCategoryId.value) return;
+  if (!confirm("This will overwrite existing Qualification heats and auto-distribute skaters based on their registration order. Continue?")) return;
+
+  try {
+    const response = await fetch(`/competitions/${competitionId.value}/categories/${selectedCategoryId.value}/auto-qualifications/`, {
+      method: 'POST'
+    });
+    if (response.ok) {
+      await fetchPools();
+    }
+  } catch (error) { console.error(error); }
+};
+
+const refreshLiveLeaderboard = async () => {
+  if (!competitionId.value || !selectedCategoryId.value || !selectedPhase.value) return;
+  try {
+    const response = await fetch(`/competitions/${competitionId.value}/categories/${selectedCategoryId.value}/rankings/?phase=${selectedPhase.value}`);
+    if (response.ok) {
+      const rankings = await response.json();
+      const catName = categories.value.find(c => c.id === selectedCategoryId.value)?.name || '';
+
+      liveLeaderboard.value = rankings.map(r => ({
+        id: r.competitor_id,
+        name: `${r.first_name} ${r.last_name}`,
+        score: r.best_score,
+        run_scores: r.run_scores,
+        nationality: r.nationality,
+        category: catName
+      }));
+
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ action: "update_leaderboard", leaderboard: liveLeaderboard.value }));
+      }
+    }
+  } catch (error) { console.error(error); }
+};
+
+onMounted(async () => {
+  if (isLive.value && (isVotingOpen.value || currentCompetitorId.value)) {
+    console.warn("Recovering from stuck state on mount...");
+    await forceResetLiveState();
+  }
+
+  if (isLive.value) startLiveEvent();
 
   try {
     const response = await fetch('/competitions/');
     if (response.ok) existingCompetitions.value = await response.json();
-  } catch (error) {
-    console.error(error);
+  } catch (error) { console.error(error); }
+
+  if (competitionId.value) {
+    await fetchCategories();
+    if (categories.value.length > 0) {
+      selectedCategoryId.value = categories.value[0].id;
+      await fetchPools();
+    }
   }
+
+  document.addEventListener('dragend', (e) => {
+    if (e.target && e.target.style) e.target.style.opacity = '1';
+  });
 });
 
-const loadCompetition = () => {
+const loadCompetition = async () => {
   if (!selectedCompetitionId.value) return;
   const comp = existingCompetitions.value.find(c => c.id === selectedCompetitionId.value);
   if (comp) {
     competitionId.value = comp.id;
     competitionName.value = comp.name;
     saveState();
-    fetchRegisteredSkaters();
+    await fetchRegisteredSkaters();
+    await fetchCategories();
   }
 };
 
@@ -246,8 +514,118 @@ const createCompetition = async () => {
       competitionId.value = data.competition_id;
       saveState();
       await fetchRegisteredSkaters();
+      await fetchCategories();
     }
   } catch (error) { console.error(error); }
+};
+
+const fetchCategories = async () => {
+  if (!competitionId.value) return;
+  try {
+    const response = await fetch(`/competitions/${competitionId.value}/categories/`);
+    if (response.ok) {
+      categories.value = await response.json();
+    }
+  } catch (error) { console.error(error); }
+};
+
+const fetchPools = async () => {
+  if (!competitionId.value || !selectedCategoryId.value || !selectedPhase.value) return;
+  try {
+    const runParam = isLive.value ? `&run_number=${currentRunNumber.value}` : '';
+    const response = await fetch(`/competitions/${competitionId.value}/categories/${selectedCategoryId.value}/pools/?phase=${selectedPhase.value}${runParam}`);
+    if (response.ok) {
+      pools.value = await response.json();
+      if (isLive.value) {
+        await refreshLiveLeaderboard();
+      }
+    }
+  } catch (error) { console.error(error); }
+};
+
+const createNewPool = async () => {
+  if (!newPoolName.value || !selectedCategoryId.value) return;
+  try {
+    const response = await fetch('/pools/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        competition_id: competitionId.value,
+        category_id: selectedCategoryId.value,
+        phase: selectedPhase.value,
+        name: newPoolName.value
+      })
+    });
+    if (response.ok) {
+      newPoolName.value = '';
+      await fetchPools();
+    }
+  } catch (error) { console.error(error); }
+};
+
+const assignSkater = async (skaterId, poolId) => {
+  if (!poolId || !skaterId) return;
+  const targetPool = pools.value.find(p => p.id === parseInt(poolId));
+  const newOrder = targetPool ? targetPool.competitors.length + 1 : 1;
+
+  try {
+    const response = await fetch('/pools/assign/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pool_id: parseInt(poolId),
+        competitor_id: skaterId,
+        start_order: newOrder
+      })
+    });
+    if (response.ok) await fetchPools();
+  } catch (error) { console.error(error); }
+};
+
+const unassignSkater = async (skaterId) => {
+  if (!skaterId) return;
+  try {
+    const response = await fetch('/pools/unassign/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        competitor_id: parseInt(skaterId),
+        phase: selectedPhase.value
+      })
+    });
+    if (response.ok) await fetchPools();
+  } catch (error) { console.error(error); }
+};
+
+const generateNextPhase = async () => {
+  if (!competitionId.value || !selectedCategoryId.value) return;
+  if (!confirm(`Are you sure you want to generate the ${genNextPhase.value} pools from the top ${genTopN.value} of ${selectedPhase.value}?`)) return;
+
+  try {
+    const response = await fetch(`/competitions/${competitionId.value}/categories/${selectedCategoryId.value}/generate-phase/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        current_phase: selectedPhase.value,
+        next_phase: genNextPhase.value,
+        top_n: genTopN.value,
+        pools_count: genPoolCount.value
+      })
+    });
+    if (response.ok) {
+      alert(`Success! Generated ${genPoolCount.value} new pools for ${genNextPhase.value}.`);
+      selectedPhase.value = genNextPhase.value;
+      await fetchPools();
+    }
+  } catch (error) { console.error(error); }
+};
+
+const downloadResults = () => {
+  if (!competitionId.value) {
+    alert("Please create or load a competition first.");
+    return;
+  }
+  window.location.href = `/competitions/${competitionId.value}/export-results/`;
 };
 
 const fetchRegisteredSkaters = async () => {
@@ -270,12 +648,16 @@ const uploadExcel = async (event) => {
     const response = await fetch(`/competitions/${competitionId.value}/import-excel/`, {
       method: 'POST', body: formData
     });
-    if (response.ok) await fetchRegisteredSkaters();
+    if (response.ok) {
+      await fetchRegisteredSkaters();
+      await fetchCategories();
+      uploadMessage.value = "Import successful!";
+    }
   } catch (error) { console.error(error); }
 };
 
 const addSkaterManually = async () => {
-  if (!newSkaterFirstName.value || !newSkaterLastName.value || !newSkaterBib.value) return;
+  if (!newSkaterFirstName.value || !newSkaterLastName.value) return;
   try {
     const response = await fetch(`/competitions/${competitionId.value}/competitors/`, {
       method: 'POST',
@@ -283,22 +665,23 @@ const addSkaterManually = async () => {
       body: JSON.stringify({
         first_name: newSkaterFirstName.value,
         last_name: newSkaterLastName.value,
-        bib_number: newSkaterBib.value
+        category: newSkaterCategory.value,
+        nationality: newSkaterNationality.value.toUpperCase()
       })
     });
     if (response.ok) {
       newSkaterFirstName.value = '';
       newSkaterLastName.value = '';
-      newSkaterBib.value = '';
       await fetchRegisteredSkaters();
+      await fetchCategories();
     }
   } catch (error) { console.error(error); }
 };
 
-const startLiveEvent = () => {
+const startLiveEvent = async () => {
+  await forceResetLiveState();
   isLive.value = true;
   saveState();
-
   const serverIp = window.location.hostname || "127.0.0.1";
   socket = new WebSocket(`ws://${serverIp}:8000/ws`);
 
@@ -306,75 +689,69 @@ const startLiveEvent = () => {
     socket.send(JSON.stringify({
       action: "start_live",
       judge_count: judgeCount.value,
+      max_runs: maxRuns.value,
       competition_name: competitionName.value
     }));
-
-    if (liveLeaderboard.value.length > 0) {
-      socket.send(JSON.stringify({ action: "update_leaderboard", leaderboard: liveLeaderboard.value }));
-    }
+    refreshLiveLeaderboard();
   };
 
-  socket.onmessage = (event) => {
+  socket.onmessage = async (event) => {
     try {
       const payload = JSON.parse(event.data);
-
-      if (payload.type === 'voting_opened') {
+      if (payload.type === 'new_run') {
+        if (payload.previous_scores) {
+          receivedScores.value = Object.keys(payload.previous_scores).map(Number);
+        } else {
+          receivedScores.value = [];
+        }
+      } else if (payload.type === 'voting_opened') {
         isVotingOpen.value = true;
         saveState();
       } else if (payload.type === 'score_received') {
-        if (!receivedScores.value.includes(payload.judge_id)) {
-          receivedScores.value.push(payload.judge_id);
-        }
+        if (!receivedScores.value.includes(payload.judge_id)) receivedScores.value.push(payload.judge_id);
         const nextUnvoted = Array.from({length: judgeCount.value}, (_, i) => i + 1).find(id => !receivedScores.value.includes(id));
         if (nextUnvoted) organizerJudgeId.value = nextUnvoted;
-
       } else if (payload.type === 'run_completed') {
+        if (payload.is_cancelled) {
+          await forceResetLiveState();
+          await fetchPools();
+          return;
+        }
+
         finalScore.value = payload.final_score;
         isVotingOpen.value = false;
 
-        const skater = registeredSkaters.value.find(s => s.bib_number === currentCompetitorId.value);
-        const name = skater ? `${skater.first_name} ${skater.last_name}` : `Skater #${currentCompetitorId.value}`;
-
-        const existingIndex = liveLeaderboard.value.findIndex(s => s.bib_number === currentCompetitorId.value);
-
-        if (existingIndex !== -1) {
-            if (payload.final_score > liveLeaderboard.value[existingIndex].score) {
-                liveLeaderboard.value[existingIndex].score = payload.final_score;
-            }
-        } else {
-            liveLeaderboard.value.push({ bib_number: currentCompetitorId.value, name: name, score: payload.final_score });
+        if (payload.is_dns || payload.final_score < 0) {
+            finalScore.value = -1.0;
         }
 
-        liveLeaderboard.value.sort((a, b) => b.score - a.score);
-        liveLeaderboard.value = liveLeaderboard.value.slice(0, 10);
-        saveState();
-
-        if (socket && socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ action: "update_leaderboard", leaderboard: liveLeaderboard.value }));
-        }
+        await refreshLiveLeaderboard();
+        await fetchPools(); // Rafraîchit les pastilles de score dans la poule en temps réel
       }
     } catch (error) {}
   };
-
   socket.onclose = () => { setTimeout(startLiveEvent, 2000); };
 };
 
-const callNextSkater = () => {
+const callSkater = async (skaterId, firstName, lastName) => {
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
-  receivedScores.value = [];
-  finalScore.value = null;
-  organizerScore.value = 5.0;
-  organizerJudgeId.value = 1;
-  isVotingOpen.value = false;
+
+  await forceResetLiveState();
+
+  currentCompetitorId.value = skaterId;
+  currentSkaterName.value = `${firstName} ${lastName}`;
+
   saveState();
 
-  const skater = registeredSkaters.value.find(s => s.bib_number === currentCompetitorId.value);
-  const skaterName = skater ? `${skater.first_name} ${skater.last_name}` : '';
+  const skater = registeredSkaters.value.find(s => s.id === skaterId);
 
   socket.send(JSON.stringify({
     action: "call_skater",
-    competitor_id: currentCompetitorId.value,
-    skater_name: skaterName,
+    competitor_id: skaterId,
+    skater_name: currentSkaterName.value,
+    category: skater ? skater.category : '',
+    nationality: skater ? skater.nationality : '',
+    phase: selectedPhase.value,
     run_number: currentRunNumber.value
   }));
 };
@@ -386,6 +763,15 @@ const openVoting = () => {
   socket.send(JSON.stringify({ action: "open_voting" }));
 };
 
+const markDNS = () => {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  if (confirm(`CRITICAL ACTION: Are you sure you want to disqualify ${currentSkaterName.value} (DNS)?`)) {
+    isVotingOpen.value = false;
+    saveState();
+    socket.send(JSON.stringify({ action: "dns_skater" }));
+  }
+};
+
 const triggerPodium = () => {
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify({ action: "show_podium", leaderboard: liveLeaderboard.value }));
@@ -393,18 +779,27 @@ const triggerPodium = () => {
 
 const submitOrganizerScore = () => {
   if (!socket || socket.readyState !== WebSocket.OPEN || !isLive.value) return;
-  if (receivedScores.value.includes(organizerJudgeId.value)) return;
-
   socket.send(JSON.stringify({ action: 'submit_score', judge_id: organizerJudgeId.value, score: organizerScore.value }));
-  organizerScore.value = 5.0;
 };
 
-onUnmounted(() => { if (socket) socket.close(); });
+watch(currentRunNumber, () => {
+  if (isLive.value) fetchPools();
+});
+
+watch(maxRuns, () => {
+  saveState();
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ action: "update_meta", max_runs: maxRuns.value }));
+  }
+});
+
+onUnmounted(() => {
+  if (socket) socket.close();
+});
 </script>
 
 <style scoped>
-/* CSS conservé à l'identique (Lights/Dark, boutons, etc.) */
-.control-room { font-family: Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background-color: #f5f5f5; color: #333; min-height: 100vh; transition: all 0.3s ease; }
+.control-room { font-family: Arial, sans-serif; max-width: 1000px; margin: 0 auto; padding: 20px; background-color: #f5f5f5; color: #333; min-height: 100vh; transition: all 0.3s ease; }
 .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .header-controls { display: flex; align-items: center; gap: 15px; }
 .btn-theme { background-color: #e0e0e0; border: none; padding: 8px 15px; border-radius: 20px; cursor: pointer; font-weight: bold; transition: background-color 0.3s; }
@@ -413,17 +808,38 @@ onUnmounted(() => { if (socket) socket.close(); });
 @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
 .card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 20px; }
 .card-inner { background-color: #f9f9f9; border: 1px solid #ddd; padding: 15px; border-radius: 6px; margin-bottom: 20px; }
-.setup-options { display: flex; flex-direction: column; gap: 20px; }
-.load-box { background-color: #e3f2fd; padding: 15px; border-radius: 6px; border: 1px solid #bbdefb; }
+
+.live-start-options { display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap; }
+.sandbox-filters, .live-context-bar { display: flex; gap: 20px; background: #e3f2fd; padding: 15px; border-radius: 8px; margin-bottom: 20px; align-items: flex-end; flex-wrap: wrap; }
+.pool-controls { display: flex; gap: 10px; margin-bottom: 20px; }
+.pools-grid, .live-pools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
+.pool-card { background: #fff; border: 1px solid #ccc; border-radius: 6px; padding: 15px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); transition: background-color 0.3s ease; }
+.unassigned-pool { border: 2px dashed #ff9800; background: #fff3e0; }
+.pool-card h3 { margin-top: 0; padding-bottom: 10px; border-bottom: 1px solid #eee; font-size: 1.1rem; }
+
+/* Drag and Drop styling */
+.drag-instruction { font-style: italic; color: #1976d2; margin-bottom: 10px; font-size: 0.9rem; }
+.draggable-item { cursor: grab; padding: 8px; border: 1px solid transparent; transition: all 0.2s ease; border-radius: 4px; }
+.draggable-item:hover { background-color: #f0f0f0; border: 1px dashed #bbb; }
+.draggable-item:active { cursor: grabbing; opacity: 0.5; }
+
+.skater-assign-list { list-style: none; padding: 0; margin: 0; max-height: 250px; overflow-y: auto; }
+.skater-assign-list li { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #f0f0f0; font-size: 0.9rem; }
+.skater-assign-list select { padding: 4px; font-size: 0.8rem; max-width: 100px; }
+.auto-generate-box { background: #e8f5e9; padding: 20px; border-radius: 8px; border: 1px solid #c8e6c9; }
+.horizontal { display: flex; flex-direction: row; align-items: center; gap: 10px; }
+.active-skater { background-color: #fff9c4; font-weight: bold; border-left: 4px solid #fbc02d; padding-left: 5px !important; }
+
 .form-group { display: flex; flex-direction: column; gap: 10px; }
 input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-radius: 4px; background-color: white; color: #333; }
-.btn { padding: 12px 20px; font-size: 1rem; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 10px; }
+.btn { padding: 12px 20px; font-size: 1rem; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
 .btn.primary { background-color: #1976d2; color: white; }
 .btn.warning { background-color: #f57c00; color: white; }
 .btn.success { background-color: #388e3c; color: white; }
 .btn.danger { background-color: #d32f2f; color: white; }
 .btn.large { font-size: 1.2rem; padding: 15px; }
-.btn.wide { width: 100%; }
+.btn.small { padding: 5px 10px; font-size: 0.85rem; }
+.btn.wide { width: 100%; margin-top: 10px; }
 .btn:disabled { background-color: #ccc; cursor: not-allowed; }
 .success-message { color: #2e7d32; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; }
 .info-message { color: #1976d2; font-style: italic; margin-top: 10px; }
@@ -433,13 +849,19 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .skaters-list-container { margin-top: 20px; background: #fff; border: 1px solid #eee; padding: 15px; border-radius: 8px; }
 .skaters-list { list-style: none; padding: 0; max-height: 200px; overflow-y: auto; }
 .skaters-list li { padding: 10px; border-bottom: 1px solid #eee; }
-.skater-id { color: #888; font-size: 0.8rem; margin-left: 10px; }
-.input-row { display: flex; gap: 20px; align-items: flex-end; }
+.input-row { display: flex; gap: 20px; align-items: flex-end; margin-top: 20px; }
 .judges-grid { display: flex; gap: 15px; margin-top: 10px; }
 .judge-indicator { flex: 1; text-align: center; padding: 15px; background-color: #e0e0e0; border-radius: 4px; font-weight: bold; transition: background-color 0.3s; }
 .judge-indicator.voted { background-color: #4caf50; color: white; }
 .result-panel { margin-top: 30px; text-align: center; padding: 20px; background-color: #fff3e0; border-radius: 8px; border: 2px solid #ff9800; }
 .score-display { font-size: 4rem; font-weight: bold; color: #e65100; }
+.active-call-info { background: #1976d2; color: white; padding: 15px; border-radius: 8px; margin-top: 20px; }
+.active-call-info h3 { margin: 0; font-size: 1.5rem; }
+
+.skater-name-block { display: flex; align-items: center; gap: 8px; }
+.inline-score-badge { background-color: #4caf50; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; }
+.inline-score-badge.dns-badge-small { background-color: #d32f2f; }
+
 .control-room.dark-theme { background-color: #121212; color: #e0e0e0; }
 .dark-theme .card { background: #1e1e1e; box-shadow: 0 2px 8px rgba(0,0,0,0.5); }
 .dark-theme .card-inner { background-color: #252525; border-color: #444; }
@@ -447,7 +869,13 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .dark-theme .btn-theme:hover { background-color: #444; }
 .dark-theme h1, .dark-theme h2, .dark-theme h3 { color: #ffffff; }
 .dark-theme input, .dark-theme select { background-color: #2c2c2c; color: #ffffff; border-color: #444; }
-.dark-theme .load-box { background-color: #1a237e; border-color: #3949ab; }
+.dark-theme .sandbox-filters, .dark-theme .live-context-bar { background: #1a237e; }
+.dark-theme .pool-card { background: #2c2c2c; border-color: #444; }
+.dark-theme .unassigned-pool { border-color: #f57c00; background: #3e2723; }
+.dark-theme .skater-assign-list li { border-bottom-color: #444; }
+.dark-theme .draggable-item:hover { background-color: #3a3a3a; border-color: #666; }
+.dark-theme .auto-generate-box { background: #1b5e20; border-color: #2e7d32; }
+.dark-theme .active-skater { background-color: #4a401a; border-left-color: #ffd600; }
 .dark-theme .import-box, .dark-theme .manual-box { background: #2c2c2c; border-color: #444; }
 .dark-theme .skaters-list-container { background: #1e1e1e; border-color: #444; }
 .dark-theme .skaters-list li { border-bottom-color: #333; }

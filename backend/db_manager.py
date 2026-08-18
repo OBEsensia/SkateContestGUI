@@ -27,7 +27,7 @@ def get_connection(db_path: str = DB_NAME) -> sqlite3.Connection:
 def setup_database(db_path: str = DB_NAME) -> None:
     """
     Initializes the complete database schema with required tables.
-    Integrates competition, competitor, run, and score tables.
+    Integrates competition, category, competitor, pool, run, and score tables.
     """
     try:
         with get_connection(db_path) as connection:
@@ -42,34 +42,80 @@ def setup_database(db_path: str = DB_NAME) -> None:
                 )
             """)
 
-            # 2. Table: competitor
+            # 2. Table: category
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS category (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    competition_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    FOREIGN KEY (competition_id) 
+                        REFERENCES competition(id) ON DELETE CASCADE,
+                    UNIQUE(competition_id, name)
+                )
+            """)
+
+            # 3. Table: competitor
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS competitor (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     competition_id INTEGER NOT NULL,
                     first_name TEXT NOT NULL,
                     last_name TEXT NOT NULL,
-                    bib_number INTEGER NOT NULL,
+                    category_id INTEGER NOT NULL,
+                    nationality TEXT NOT NULL,
                     FOREIGN KEY (competition_id) 
                         REFERENCES competition(id) ON DELETE CASCADE,
-                    UNIQUE(competition_id, bib_number)
+                    FOREIGN KEY (category_id) 
+                        REFERENCES category(id) ON DELETE CASCADE,
+                    UNIQUE(competition_id, first_name, last_name)
                 )
             """)
 
-            # 3. Table: run
+            # 4. Table: pool
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pool (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    competition_id INTEGER NOT NULL,
+                    category_id INTEGER NOT NULL,
+                    phase TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    FOREIGN KEY (competition_id) 
+                        REFERENCES competition(id) ON DELETE CASCADE,
+                    FOREIGN KEY (category_id) 
+                        REFERENCES category(id) ON DELETE CASCADE,
+                    UNIQUE(category_id, phase, name)
+                )
+            """)
+
+            # 5. Table: pool_competitor
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pool_competitor (
+                    pool_id INTEGER NOT NULL,
+                    competitor_id INTEGER NOT NULL,
+                    start_order INTEGER NOT NULL,
+                    PRIMARY KEY (pool_id, competitor_id),
+                    FOREIGN KEY (pool_id) 
+                        REFERENCES pool(id) ON DELETE CASCADE,
+                    FOREIGN KEY (competitor_id) 
+                        REFERENCES competitor(id) ON DELETE CASCADE
+                )
+            """)
+
+            # 6. Table: run
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS run (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     competitor_id INTEGER NOT NULL,
+                    phase TEXT NOT NULL,
                     run_number INTEGER NOT NULL,
                     final_score REAL,
                     FOREIGN KEY (competitor_id) 
                         REFERENCES competitor(id) ON DELETE CASCADE,
-                    UNIQUE(competitor_id, run_number)
+                    UNIQUE(competitor_id, phase, run_number)
                 )
             """)
 
-            # 4. Table: score
+            # 7. Table: score
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS score (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
