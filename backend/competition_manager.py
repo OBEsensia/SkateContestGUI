@@ -359,22 +359,16 @@ def generate_next_phase(
     return pool_ids
 
 
-def export_phase_results_to_excel(
-        db_connection: sqlite3.Connection,
-        competition_id: int,
-        file_path: str
-) -> None:
-    """Exports all results, grouped by category and phase, into a single Excel file."""
+def export_phase_results_to_excel(db_connection: sqlite3.Connection, competition_id: int, file_path: str) -> None:
     workbook = openpyxl.Workbook()
     workbook.remove(workbook.active)
 
     cursor = db_connection.cursor()
-
-    # Get all categories
     cursor.execute("SELECT id, name FROM category WHERE competition_id = ?", (competition_id,))
     categories = cursor.fetchall()
 
     phases = ["Qualifications", "Semi-Final", "Final"]
+    next_phase_map = {"Qualifications": "Semi-Final", "Semi-Final": "Final", "Final": None}
 
     dns_fill = PatternFill(start_color="FFCDD2", end_color="FFCDD2", fill_type="solid")
     dns_font = Font(color="B71C1C", italic=True)
@@ -382,36 +376,39 @@ def export_phase_results_to_excel(
 
     for cat_id, cat_name in categories:
         for phase in phases:
+            # Check if anyone is assigned to this phase
+            cursor.execute("""
+                SELECT 1 FROM pool_competitor pc 
+                JOIN pool p ON pc.pool_id = p.id 
+                WHERE p.competition_id = ? AND p.category_id = ? AND p.phase = ? LIMIT 1
+            """, (competition_id, cat_id, phase))
+            if not cursor.fetchone(): continue
+
             ranking = get_phase_ranking(db_connection, competition_id, cat_id, phase)
-            if not ranking or all(r["best_score"] == 0.0 for r in ranking):
-                continue  # Skip empty phases
 
             sheet_name = f"{cat_name[:15]}_{phase[:15]}"
             sheet = workbook.create_sheet(title=sheet_name)
 
+            next_phase = next_phase_map.get(phase)
             headers = ["Rank", "First Name", "Last Name", "Nationality", "Best Score", "Run 1", "Run 2", "Run 3"]
-            sheet.append(headers)
+            if next_phase:
+                headers.extend([f"Qualified for {next_phase}?", f"Heat ({next_phase})", f"Order ({next_phase})"])
 
-            for cell in sheet[1]:
-                cell.font = header_font
+            sheet.append(headers)
+            for cell in sheet[1]: cell.font = header_font
 
             for rank_data in ranking:
                 c_id = rank_data["competitor_id"]
-                cursor.execute(
-                    "SELECT run_number, final_score FROM run WHERE competitor_id = ? AND phase = ?",
-                    (c_id, phase)
-                )
+                cursor.execute("SELECT run_number, final_score FROM run WHERE competitor_id = ? AND phase = ?",
+                               (c_id, phase))
                 runs = {r[0]: r[1] for r in cursor.fetchall()}
 
-                r1 = runs.get(1, "")
-                r2 = runs.get(2, "")
-                r3 = runs.get(3, "")
-
+                r1, r2, r3 = runs.get(1, ""), runs.get(2, ""), runs.get(3, "")
                 best_score = rank_data["best_score"]
                 is_dns = (best_score < 0)
 
                 row_data = [
-                    "-" if is_dns else rank_data["rank"],
+                    rank_data["rank"],
                     rank_data["first_name"],
                     rank_data["last_name"],
                     rank_data["nationality"],
@@ -421,9 +418,20 @@ def export_phase_results_to_excel(
                     "DNS" if r3 == -1.0 else (round(r3, 2) if r3 != "" else "")
                 ]
 
+                if next_phase:
+                    cursor.execute("""
+                        SELECT p.name, pc.start_order FROM pool_competitor pc
+                        JOIN pool p ON pc.pool_id = p.id
+                        WHERE pc.competitor_id = ? AND p.phase = ?
+                    """, (c_id, next_phase))
+                    next_assignment = cursor.fetchone()
+                    if next_assignment:
+                        row_data.extend(["YES", next_assignment[0], next_assignment[1]])
+                    else:
+                        row_data.extend(["NO", "-", "-"])
+
                 sheet.append(row_data)
 
-                # Apply DNS styling if best score is < 0
                 if is_dns:
                     for cell in sheet[sheet.max_row]:
                         cell.fill = dns_fill
