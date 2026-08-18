@@ -3,6 +3,9 @@
     <header class="header">
       <h1>Skate Contest - Control Room</h1>
       <div class="header-controls">
+        <button class="btn success small" @click="downloadResults" v-if="competitionId">
+          📥 Export Results
+        </button>
         <button class="btn-theme" @click="toggleTheme">
           {{ isDarkMode ? '☀️ Light' : '🌙 Dark' }}
         </button>
@@ -204,10 +207,10 @@
               <span>{{ skater.start_order }}. {{ skater.first_name }} {{ skater.last_name }}</span>
               <button
                 class="btn primary small"
-                @click="prepCallSkater(skater.competitor_id, skater.first_name, skater.last_name)"
-                :disabled="isVotingOpen"
+                @click="callSkaterDirectly(skater.competitor_id, skater.first_name, skater.last_name)"
+                :disabled="isVotingOpen || currentCompetitorId === skater.competitor_id"
               >
-                Call
+                {{ currentCompetitorId === skater.competitor_id ? 'On Course' : 'Call to Screen' }}
               </button>
             </li>
           </ul>
@@ -220,11 +223,10 @@
           <h3>On Course: {{ currentSkaterName }} (Run {{ currentRunNumber }})</h3>
         </div>
         <div class="input-row">
-          <button class="btn primary large" @click="callNextSkater">1. Push to Screen</button>
           <button class="btn warning large" @click="openVoting" :disabled="isVotingOpen">
-            {{ isVotingOpen ? 'Voting is Open' : '2. Open Voting' }}
+            {{ isVotingOpen ? 'Voting is Open' : '1. Open Voting' }}
           </button>
-          <button class="btn danger large" @click="markDNS" :disabled="isVotingOpen">☠️ DNS</button>
+          <button class="btn danger large" @click="markDNS" :disabled="isVotingOpen">☠️ 2. Mark DNS</button>
         </div>
       </div>
 
@@ -434,7 +436,6 @@ const createNewPool = async () => {
 
 const assignSkater = async (skaterId, poolId) => {
   if (!poolId || !skaterId) return;
-
   const targetPool = pools.value.find(p => p.id === parseInt(poolId));
   const newOrder = targetPool ? targetPool.competitors.length + 1 : 1;
 
@@ -448,9 +449,7 @@ const assignSkater = async (skaterId, poolId) => {
         start_order: newOrder
       })
     });
-    if (response.ok) {
-      await fetchPools();
-    }
+    if (response.ok) await fetchPools();
   } catch (error) { console.error(error); }
 };
 
@@ -475,6 +474,14 @@ const generateNextPhase = async () => {
       await fetchPools();
     }
   } catch (error) { console.error(error); }
+};
+
+const downloadResults = () => {
+  if (!competitionId.value) {
+    alert("Please create or load a competition first.");
+    return;
+  }
+  window.location.href = `/competitions/${competitionId.value}/export-results/`;
 };
 
 const fetchRegisteredSkaters = async () => {
@@ -585,7 +592,9 @@ const startLiveEvent = () => {
   socket.onclose = () => { setTimeout(startLiveEvent, 2000); };
 };
 
-const prepCallSkater = (skaterId, firstName, lastName) => {
+const callSkaterDirectly = (skaterId, firstName, lastName) => {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
   currentCompetitorId.value = skaterId;
   currentSkaterName.value = `${firstName} ${lastName}`;
   receivedScores.value = [];
@@ -593,17 +602,14 @@ const prepCallSkater = (skaterId, firstName, lastName) => {
   organizerScore.value = 50.0;
   organizerJudgeId.value = 1;
   isVotingOpen.value = false;
-};
 
-const callNextSkater = () => {
-  if (!socket || socket.readyState !== WebSocket.OPEN || !currentCompetitorId.value) return;
   saveState();
 
-  const skater = registeredSkaters.value.find(s => s.id === currentCompetitorId.value);
+  const skater = registeredSkaters.value.find(s => s.id === skaterId);
 
   socket.send(JSON.stringify({
     action: "call_skater",
-    competitor_id: currentCompetitorId.value,
+    competitor_id: skaterId,
     skater_name: currentSkaterName.value,
     category: skater ? skater.category : '',
     nationality: skater ? skater.nationality : '',

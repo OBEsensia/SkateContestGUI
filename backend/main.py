@@ -16,6 +16,7 @@ from fastapi import (
     File
 )
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from db_manager import setup_database, get_connection
@@ -28,6 +29,7 @@ from competition_manager import (
     get_pools_with_competitors,
     get_phase_ranking,
     generate_next_phase,
+    export_phase_results_to_excel,
     CompetitorRegistration,
     PoolCreateData
 )
@@ -310,6 +312,25 @@ def generate_phase(
         raise HTTPException(status_code=500, detail="Database error")
 
 
+@app.get("/competitions/{competition_id}/export-results/")
+def export_results(
+        competition_id: int,
+        db_conn: sqlite3.Connection = Depends(get_db_connection)
+) -> FileResponse:
+    try:
+        file_path = f"export_competition_{competition_id}.xlsx"
+        export_phase_results_to_excel(db_conn, competition_id, file_path)
+
+        return FileResponse(
+            path=file_path,
+            filename=f"Skate_Contest_Results_{competition_id}.xlsx",
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    except Exception as error:
+        logger.error(f"Error exporting results: {error}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 class ConnectionManager:
     def __init__(self) -> None:
         self.active_connections: List[WebSocket] = []
@@ -403,6 +424,18 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif action == "dns_skater":
                 global_manager.received_scores = {}
+
+                # Update database directly from WebSocket for critical DNS
+                db_conn = get_connection()
+                cursor = db_conn.cursor()
+                cursor.execute(
+                    "INSERT OR REPLACE INTO run (competitor_id, phase, run_number, final_score) VALUES (?, ?, ?, ?)",
+                    (global_manager.cached_run.get("competitor_id"), global_manager.cached_run.get("phase"),
+                     global_manager.cached_run.get("run_number"), -1.0)
+                )
+                db_conn.commit()
+                db_conn.close()
+
                 await global_manager.broadcast_json({
                     "type": "run_completed",
                     "final_score": -1.0,
@@ -427,7 +460,20 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 current_judge_count = getattr(global_manager, "judge_count", 3)
                 if len(global_manager.received_scores) >= current_judge_count:
+                    # Implement drop high/low for 5 judges logic here if requested, currently doing simple average
                     final_score = sum(global_manager.received_scores.values()) / current_judge_count
+
+                    # Update database directly from WebSocket
+                    db_conn = get_connection()
+                    cursor = db_conn.cursor()
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO run (competitor_id, phase, run_number, final_score) VALUES (?, ?, ?, ?)",
+                        (global_manager.cached_run.get("competitor_id"), global_manager.cached_run.get("phase"),
+                         global_manager.cached_run.get("run_number"), final_score)
+                    )
+                    db_conn.commit()
+                    db_conn.close()
+
                     await global_manager.broadcast_json({
                         "type": "run_completed",
                         "final_score": final_score,
