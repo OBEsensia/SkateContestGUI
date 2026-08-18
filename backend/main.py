@@ -17,14 +17,19 @@ from fastapi import (
 )
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from dataclasses import dataclass, field
 
 from db_manager import setup_database, get_connection
 from competition_manager import (
     create_competition,
     register_competitor_manually,
     import_competitors_from_excel,
-    CompetitorRegistration
+    create_pool,
+    assign_competitor_to_pool,
+    get_pools_with_competitors,
+    get_phase_ranking,
+    generate_next_phase,
+    CompetitorRegistration,
+    PoolCreateData
 )
 
 import mimetypes
@@ -63,7 +68,28 @@ class CompetitionCreate(BaseModel):
 class CompetitorCreate(BaseModel):
     first_name: str
     last_name: str
-    bib_number: int
+    category: str
+    nationality: str
+
+
+class PoolCreate(BaseModel):
+    competition_id: int
+    category_id: int
+    phase: str
+    name: str
+
+
+class PoolAssign(BaseModel):
+    pool_id: int
+    competitor_id: int
+    start_order: int
+
+
+class GeneratePhaseRequest(BaseModel):
+    current_phase: str
+    next_phase: str
+    top_n: int
+    pools_count: int
 
 
 @app.post("/competitions/")
@@ -97,6 +123,24 @@ def get_all_competitions(
         raise HTTPException(status_code=500, detail="Database error")
 
 
+@app.get("/competitions/{competition_id}/categories/")
+def get_categories(
+        competition_id: int,
+        db_conn: sqlite3.Connection = Depends(get_db_connection)
+) -> List[Dict[str, Any]]:
+    try:
+        cursor = db_conn.cursor()
+        cursor.execute(
+            "SELECT id, name FROM category WHERE competition_id = ? ORDER BY name ASC",
+            (competition_id,)
+        )
+        rows = cursor.fetchall()
+        return [{"id": r[0], "name": r[1]} for r in rows]
+    except Exception as error:
+        logger.error(f"Error fetching categories: {error}")
+        raise HTTPException(status_code=500, detail="Database error")
+
+
 @app.post("/competitions/{competition_id}/competitors/")
 def register_competitor(
         competition_id: int,
@@ -107,7 +151,8 @@ def register_competitor(
         competition_id=competition_id,
         first_name=competitor_data.first_name,
         last_name=competitor_data.last_name,
-        bib_number=competitor_data.bib_number
+        category=competitor_data.category,
+        nationality=competitor_data.nationality
     )
     try:
         competitor_id = register_competitor_manually(db_conn, registration)
@@ -136,6 +181,8 @@ def upload_competitors_excel(
             competition_id=competition_id
         )
         return {"imported_count": imported_count}
+    except KeyError as error:
+        raise HTTPException(status_code=400, detail=str(error))
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
     finally:
@@ -151,21 +198,121 @@ def get_competitors_for_competition(
     try:
         cursor = db_conn.cursor()
         cursor.execute(
-            """SELECT id, first_name, last_name, bib_number FROM competitor 
-               WHERE competition_id = ? ORDER BY bib_number ASC""",
+            """
+            SELECT c.id, c.first_name, c.last_name, cat.name as category, cat.id as category_id, c.nationality 
+            FROM competitor c
+            JOIN category cat ON c.category_id = cat.id
+            WHERE c.competition_id = ? 
+            ORDER BY cat.name ASC, c.last_name ASC
+            """,
             (competition_id,)
         )
         rows = cursor.fetchall()
-        return [{"id": r[0], "first_name": r[1], "last_name": r[2], "bib_number": r[3]} for r in rows]
+        return [
+            {
+                "id": r[0],
+                "first_name": r[1],
+                "last_name": r[2],
+                "category": r[3],
+                "category_id": r[4],
+                "nationality": r[5]
+            } for r in rows
+        ]
     except Exception as error:
         logger.error(f"Error fetching competitors: {error}")
+        raise HTTPException(status_code=500, detail="Database error")
+
+
+@app.post("/pools/")
+def create_new_pool(
+        pool_data: PoolCreate,
+        db_conn: sqlite3.Connection = Depends(get_db_connection)
+) -> Dict[str, int]:
+    try:
+        data = PoolCreateData(
+            competition_id=pool_data.competition_id,
+            category_id=pool_data.category_id,
+            phase=pool_data.phase,
+            name=pool_data.name
+        )
+        pool_id = create_pool(db_conn, data)
+        return {"pool_id": pool_id}
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+
+@app.post("/pools/assign/")
+def assign_skater_to_pool(
+        assign_data: PoolAssign,
+        db_conn: sqlite3.Connection = Depends(get_db_connection)
+) -> Dict[str, str]:
+    try:
+        assign_competitor_to_pool(
+            db_conn,
+            pool_id=assign_data.pool_id,
+            competitor_id=assign_data.competitor_id,
+            start_order=assign_data.start_order
+        )
+        return {"status": "success"}
+    except Exception as error:
+        logger.error(f"Error assigning skater to pool: {error}")
+        raise HTTPException(status_code=500, detail="Database error")
+
+
+@app.get("/competitions/{competition_id}/categories/{category_id}/pools/")
+def get_pools_for_category(
+        competition_id: int,
+        category_id: int,
+        phase: str,
+        db_conn: sqlite3.Connection = Depends(get_db_connection)
+) -> List[Dict[str, Any]]:
+    try:
+        return get_pools_with_competitors(db_conn, competition_id, category_id, phase)
+    except Exception as error:
+        logger.error(f"Error fetching pools: {error}")
+        raise HTTPException(status_code=500, detail="Database error")
+
+
+@app.get("/competitions/{competition_id}/categories/{category_id}/rankings/")
+def get_rankings(
+        competition_id: int,
+        category_id: int,
+        phase: str,
+        db_conn: sqlite3.Connection = Depends(get_db_connection)
+) -> List[Dict[str, Any]]:
+    try:
+        return get_phase_ranking(db_conn, competition_id, category_id, phase)
+    except Exception as error:
+        logger.error(f"Error fetching rankings: {error}")
+        raise HTTPException(status_code=500, detail="Database error")
+
+
+@app.post("/competitions/{competition_id}/categories/{category_id}/generate-phase/")
+def generate_phase(
+        competition_id: int,
+        category_id: int,
+        request_data: GeneratePhaseRequest,
+        db_conn: sqlite3.Connection = Depends(get_db_connection)
+) -> Dict[str, Any]:
+    try:
+        pool_ids = generate_next_phase(
+            db_connection=db_conn,
+            competition_id=competition_id,
+            category_id=category_id,
+            current_phase=request_data.current_phase,
+            next_phase=request_data.next_phase,
+            top_n=request_data.top_n,
+            pools_count=request_data.pools_count
+        )
+        return {"status": "success", "generated_pools": len(pool_ids)}
+    except Exception as error:
+        logger.error(f"Error generating phase: {error}")
         raise HTTPException(status_code=500, detail="Database error")
 
 
 class ConnectionManager:
     def __init__(self) -> None:
         self.active_connections: List[WebSocket] = []
-        # Le cache complet des derniers événements
         self.cached_meta: Dict[str, Any] = {}
         self.cached_run: Dict[str, Any] = {}
         self.cached_voting: Dict[str, Any] = {}
@@ -176,7 +323,6 @@ class ConnectionManager:
         await websocket.accept()
         self.active_connections.append(websocket)
 
-        # Rattrapage (Catch-up) immédiat pour celui qui se connecte
         if self.cached_meta:
             await websocket.send_json(self.cached_meta)
         if self.cached_leaderboard:
@@ -194,13 +340,12 @@ class ConnectionManager:
     async def broadcast_json(self, message: Dict[str, Any]) -> None:
         msg_type = message.get("type")
 
-        # Mise à jour intelligente du cache
         if msg_type == "board_meta":
             self.cached_meta = message
         elif msg_type == "new_run":
             self.cached_run = message
-            self.cached_voting = {}  # Réinitialise l'état de vote
-            self.cached_podium = {}  # Quitte le mode podium
+            self.cached_voting = {}
+            self.cached_podium = {}
         elif msg_type == "voting_opened":
             self.cached_voting = message
         elif msg_type == "podium_mode":
@@ -219,7 +364,6 @@ global_manager = ConnectionManager()
 async def websocket_endpoint(websocket: WebSocket):
     await global_manager.connect(websocket)
 
-    # Informer explicitement de la configuration
     await websocket.send_json({
         "type": "board_meta",
         "competition_name": getattr(global_manager, "competition_name", "SKATE CONTEST"),
@@ -246,12 +390,23 @@ async def websocket_endpoint(websocket: WebSocket):
                     "type": "new_run",
                     "competitor_id": data.get("competitor_id"),
                     "skater_name": data.get("skater_name", ""),
+                    "category": data.get("category", ""),
+                    "nationality": data.get("nationality", ""),
+                    "phase": data.get("phase", "Qualifications"),
                     "run_number": data.get("run_number")
                 })
 
             elif action == "open_voting":
                 await global_manager.broadcast_json({
                     "type": "voting_opened"
+                })
+
+            elif action == "dns_skater":
+                global_manager.received_scores = {}
+                await global_manager.broadcast_json({
+                    "type": "run_completed",
+                    "final_score": -1.0,
+                    "is_dns": True
                 })
 
             elif action == "show_podium":
@@ -275,7 +430,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     final_score = sum(global_manager.received_scores.values()) / current_judge_count
                     await global_manager.broadcast_json({
                         "type": "run_completed",
-                        "final_score": final_score
+                        "final_score": final_score,
+                        "is_dns": False
                     })
 
             elif action == "update_leaderboard":
