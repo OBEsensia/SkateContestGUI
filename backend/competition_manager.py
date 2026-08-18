@@ -1,5 +1,6 @@
 import logging
 import sqlite3
+import math
 from dataclasses import dataclass
 from typing import Optional, Dict, List, Any
 import openpyxl
@@ -134,10 +135,78 @@ def create_pool(db_connection: sqlite3.Connection, pool_data: PoolCreateData) ->
 
 def assign_competitor_to_pool(db_connection: sqlite3.Connection, pool_id: int, competitor_id: int,
                               start_order: int) -> None:
-    query = "INSERT OR REPLACE INTO pool_competitor (pool_id, competitor_id, start_order) VALUES (?, ?, ?)"
     cursor = db_connection.cursor()
+    # 1. Identifier la phase de la nouvelle poule pour éviter les doublons dans une même phase
+    cursor.execute("SELECT phase FROM pool WHERE id = ?", (pool_id,))
+    row = cursor.fetchone()
+    if not row: return
+    phase = row[0]
+
+    # 2. Supprimer toute affectation existante pour ce skateur dans cette phase
+    cursor.execute("""
+        DELETE FROM pool_competitor 
+        WHERE competitor_id = ? AND pool_id IN (SELECT id FROM pool WHERE phase = ?)
+    """, (competitor_id, phase))
+
+    # 3. Insérer la nouvelle affectation
+    query = "INSERT INTO pool_competitor (pool_id, competitor_id, start_order) VALUES (?, ?, ?)"
     cursor.execute(query, (pool_id, competitor_id, start_order))
     db_connection.commit()
+
+
+def unassign_competitor_from_phase(db_connection: sqlite3.Connection, competitor_id: int, phase: str) -> None:
+    cursor = db_connection.cursor()
+    cursor.execute("""
+        DELETE FROM pool_competitor 
+        WHERE competitor_id = ? AND pool_id IN (SELECT id FROM pool WHERE phase = ?)
+    """, (competitor_id, phase))
+    db_connection.commit()
+
+
+def auto_generate_qualifications(db_connection: sqlite3.Connection, competition_id: int, category_id: int) -> int:
+    """Distribue automatiquement les skateurs en poules optimisées (3 ou 4) selon l'ordre d'import."""
+    cursor = db_connection.cursor()
+
+    # Récupérer les skateurs dans l'ordre de création (ID croissant = ordre d'import Excel)
+    cursor.execute("""
+        SELECT id FROM competitor 
+        WHERE competition_id = ? AND category_id = ? 
+        ORDER BY id ASC
+    """, (competition_id, category_id))
+    skaters = [row[0] for row in cursor.fetchall()]
+
+    total_skaters = len(skaters)
+    if total_skaters == 0:
+        return 0
+
+    # Calcul algorithmique de la répartition (Max 5, cible 3 ou 4)
+    if total_skaters <= 5:
+        sizes = [total_skaters]
+    else:
+        num_pools = math.ceil(total_skaters / 4.0)
+        base_size = total_skaters // num_pools
+        remainder = total_skaters % num_pools
+        # Ex pour 14 : ceil(14/4)=4. base=3, rem=2. -> [4, 4, 3, 3]
+        sizes = [base_size + 1] * remainder + [base_size] * (num_pools - remainder)
+
+    # Nettoyage des poules de qualification existantes (Reset propre)
+    cursor.execute("DELETE FROM pool WHERE competition_id = ? AND category_id = ? AND phase = 'Qualifications'",
+                   (competition_id, category_id))
+    db_connection.commit()
+
+    current_idx = 0
+    pools_created = 0
+
+    for i, size in enumerate(sizes):
+        pool_data = PoolCreateData(competition_id, category_id, "Qualifications", f"Heat {i + 1}")
+        pool_id = create_pool(db_connection, pool_data)
+        pools_created += 1
+
+        for order in range(1, size + 1):
+            assign_competitor_to_pool(db_connection, pool_id, skaters[current_idx], order)
+            current_idx += 1
+
+    return pools_created
 
 
 def get_pools_with_competitors(db_connection: sqlite3.Connection, competition_id: int, category_id: int, phase: str,
@@ -283,7 +352,6 @@ def export_phase_results_to_excel(db_connection: sqlite3.Connection, competition
             sheet_name = f"{cat_name[:15]}_{phase[:15]}"
             sheet = workbook.create_sheet(title=sheet_name)
 
-            # Detect max runs dynamically
             max_run_num = 0
             for r in ranking:
                 if r["run_scores"]:
