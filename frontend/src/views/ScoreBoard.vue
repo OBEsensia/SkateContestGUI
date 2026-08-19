@@ -245,6 +245,15 @@ const connectWebSocket = () => {
         isPodiumMode.value = true;
         if (payload.leaderboard) leaderboard.value = payload.leaderboard;
       }
+      else if (payload.type === 'board_reset') {
+        competitionName.value = 'SKATE CONTEST';
+        currentCompetitorId.value = null;
+        boardState.value = 'waiting';
+        isPodiumMode.value = false;
+        leaderboard.value = [];
+        finalScore.value = null;
+        receivedVotes.value = 0;
+      }
     } catch (error) {}
   };
 
