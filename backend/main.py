@@ -565,6 +565,21 @@ async def websocket_endpoint(websocket: WebSocket):
                     "leaderboard": data.get("leaderboard", [])
                 })
 
+            elif action == "close_event":
+                # Purge totale de la mémoire du serveur
+                global_manager.cached_meta = {}
+                global_manager.cached_run = {}
+                global_manager.cached_voting = {}
+                global_manager.cached_podium = {}
+                global_manager.cached_leaderboard = {}
+                global_manager.received_scores = {}
+                global_manager.history_scores = {}
+
+                # Signal de nettoyage aux écrans
+                await global_manager.broadcast_json({
+                    "type": "board_reset"
+                })
+
     except WebSocketDisconnect:
         global_manager.disconnect(websocket)
     except Exception as error:

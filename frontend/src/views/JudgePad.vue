@@ -175,6 +175,13 @@ const connectWebSocket = () => {
       else if (payload.type === 'podium_mode') {
         if (payload.leaderboard) leaderboard.value = payload.leaderboard;
       }
+      else if (payload.type === 'board_reset') {
+        currentCompetitorId.value = null;
+        isVotingOpen.value = false;
+        hasSubmitted.value = false;
+        leaderboard.value = [];
+        currentScore.value = 50.0;
+      }
     } catch (error) {}
   };
 

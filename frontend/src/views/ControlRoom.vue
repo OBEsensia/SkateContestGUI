@@ -44,8 +44,9 @@
       </div>
 
       <div v-else class="registration-panel">
-        <div class="success-message">
-          Active Event: {{ competitionName }} (ID: {{ competitionId }})
+        <div class="success-message" style="display: flex; justify-content: space-between; align-items: center;">
+          <span>Active Event: {{ competitionName }} (ID: {{ competitionId }})</span>
+          <button class="btn danger small" @click="closeCompetition">⬅️ New / Switch Event</button>
         </div>
 
         <div class="split-panel">
@@ -368,6 +369,46 @@ const quitLiveMode = async () => {
   }
 };
 
+const closeCompetition = () => {
+  if (confirm("Are you sure you want to close the current event and return to the main menu?")) {
+
+    // --- NOUVEAU : Envoi garanti du signal de reset (Bouton nucléaire) ---
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ action: "close_event" }));
+    } else {
+      // Si la Tour de Contrôle n'était pas en LIVE, on ouvre une ligne directe d'urgence
+      const serverIp = window.location.hostname || "127.0.0.1";
+      const emergencySocket = new WebSocket(`ws://${serverIp}:8000/ws`);
+      emergencySocket.onopen = () => {
+        emergencySocket.send(JSON.stringify({ action: "close_event" }));
+        setTimeout(() => emergencySocket.close(), 1000); // On raccroche après 1 seconde
+      };
+    }
+    // ---------------------------------------------------------------------
+
+    isLive.value = false;
+    isVotingOpen.value = false;
+    currentCompetitorId.value = null;
+
+    competitionId.value = null;
+    competitionName.value = '';
+    registeredSkaters.value = [];
+    categories.value = [];
+    pools.value = [];
+    liveLeaderboard.value = [];
+    selectedCategoryId.value = '';
+
+    localStorage.removeItem('comp_id');
+    localStorage.removeItem('comp_name');
+    localStorage.removeItem('skaters');
+    localStorage.removeItem('leaderboard');
+    localStorage.removeItem('is_live');
+    localStorage.removeItem('is_voting_open');
+    localStorage.removeItem('max_runs');
+    localStorage.removeItem('judge_count');
+  }
+};
+
 const existingCompetitions = ref([]);
 const selectedCompetitionId = ref('');
 const eventDate = ref('');
@@ -495,6 +536,8 @@ const loadCompetition = async () => {
   if (comp) {
     competitionId.value = comp.id;
     competitionName.value = comp.name;
+    pools.value = [];
+    liveLeaderboard.value = [];
     saveState();
     await fetchRegisteredSkaters();
     await fetchCategories();
@@ -512,6 +555,8 @@ const createCompetition = async () => {
     if (response.ok) {
       const data = await response.json();
       competitionId.value = data.competition_id;
+      pools.value = [];
+      liveLeaderboard.value = [];
       saveState();
       await fetchRegisteredSkaters();
       await fetchCategories();
@@ -726,7 +771,7 @@ const startLiveEvent = async () => {
         }
 
         await refreshLiveLeaderboard();
-        await fetchPools(); // Rafraîchit les pastilles de score dans la poule en temps réel
+        await fetchPools();
       }
     } catch (error) {}
   };
