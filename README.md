@@ -26,6 +26,8 @@ A real-time, local-network web application designed to manage skateboarding comp
 * **Multi-Tab Excel Export**: Generate an official `.xlsx` results file with one click (one tab per category and phase).
 * **Full Traceability**: The export lists the actual rank, individual Run scores (1, 2, and 3), highlights **DNS** skaters in red, and explicitly states if a skater qualified for the next phase (including their next Heat and Start Order).
 
+### 5. 🔄 Event Switching & Data Isolation
+* **New / Switch Event**: Safely close the active competition to create a new one or load a previous archive. This action purges the organizer's local session cache to guarantee zero data overlap between contests and attempts to broadcast a global wipe signal to all connected interfaces.
 ---
 
 ### ⚡ Advanced Tournament Features
@@ -192,3 +194,8 @@ If you edit the Vue interface, run npm run build in the frontend folder to updat
 
 - **Backend code modifications not applying?**
 Any change to Python files (main.py or competition_manager.py) requires a hard restart of the command prompt server (close the black window and rerun the .bat file).
+
+## 🐛 Known Issues
+
+* **Ghost Leaderboard on Event Close**: If the organizer clicks the **"⬅️ New / Switch Event"** button while the Control Room is *not* in an active Live session, the browser may fail to establish the emergency WebSocket connection required to wipe the remote screens. As a result, the Public Score Board and Judge Tablets might continue displaying the previous event's leaderboard. 
+  * *Workaround*: This is purely a visual artifact. As soon as the organizer configures the new competition and clicks **"GO LIVE"**, the system will forcefully synchronize and overwrite all screens with the correct, fresh data.
