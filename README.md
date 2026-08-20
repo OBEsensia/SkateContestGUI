@@ -123,6 +123,19 @@ cd backend
 pip install fastapi uvicorn pydantic openpyxl python-multipart websockets
 ```
 
+## 🔄 Updating the Application
+To fetch the latest features and ensure your local environment is fully synchronized, double-click:
+
+```DOS
+update_skate_contest.bat
+```
+
+This automated script performs a complete, safe CI/CD sequence:
+1. Pulls the latest code from the Git repository.
+2. Builds the updated Vue.js frontend interface.
+3. Installs any new Python backend dependencies.
+4. Protects your Data: It compares the new database schema with your existing skate_contest.db. If structural changes are detected, it automatically renames and backs up your old database (e.g., skate_contest_v1.0.0.db) before applying the new blank schema, ensuring you never lose past event records!
+
 ## 🏁 Running the Application
 To start the system, you can use the provided batch script if you are on Windows:
 ```dos
@@ -165,24 +178,25 @@ Click the 🏆 SHOW PODIUM (END CONTEST) button in the Control Room to switch th
 
 ## 🛠️ Project Structure
 ```Plaintext
-skate-contest/
+.
 ├── backend/
-│   ├── main.py                  # FastAPI server and WebSocket logic
-│   ├── db_manager.py            # SQLite database initialization
-│   ├── competition_manager.py   # CRUD operations and Excel import logic
-│   ├── skate_contest.db         # Auto-generated SQLite database
-│   └── static/                  # Auto-generated frontend build files
+│   ├── main.py                  # FastAPI server, API Endpoints & WebSocket Logic
+│   ├── db_manager.py            # SQLite schema initialization
+│   ├── competition_manager.py   # Complex SQL queries, ranking math, Excel engine
+│   ├── skate_contest.db         # Auto-generated relational SQLite database
+│   └── static/                  # Production folder serving the compiled Frontend
 ├── frontend/
 │   ├── index.html               # Vite entry point
-│   ├── package.json             # Node dependencies
-│   ├── vite.config.js           # Vite configuration (routes to backend/static)
+│   ├── package.json             # Node dependencies (Vue.js, Vite)
 │   └── src/
-│       ├── main.js              # Vue app initialization and Router
+│       ├── main.js              # Vue app initialization & Router config
 │       └── views/
-│           ├── ControlRoom.vue  # Organizer Dashboard
-│           ├── JudgePad.vue     # Judge Interface
+│           ├── ControlRoom.vue  # Organizer Dashboard 
+│           ├── JudgePad.vue     # Judge Tablet 
 │           └── ScoreBoard.vue   # Public Display
-└── start_skate_contest.bat      # Windows startup script
+├── start_skate_contest.bat      # Windows automated startup script
+├── update_skate_contest.bat     # 1-click Update & Deployment script
+└── update.py                    # Update logic (Git, Build, DB Schema check)
 ```
 
 ## ⚠️ Troubleshooting
