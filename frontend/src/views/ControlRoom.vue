@@ -324,6 +324,7 @@ const isDarkMode = ref(localStorage.getItem('control_room_theme') === 'dark');
 const toggleTheme = () => {
   isDarkMode.value = !isDarkMode.value;
   localStorage.setItem('control_room_theme', isDarkMode.value ? 'dark' : 'light');
+  document.body.style.backgroundColor = isDarkMode.value ? '#121212' : '#f5f5f5';
 };
 
 const isLive = ref(localStorage.getItem('is_live') === 'true');
@@ -499,6 +500,8 @@ const refreshLiveLeaderboard = async () => {
 };
 
 onMounted(async () => {
+  document.body.style.backgroundColor = isDarkMode.value ? '#121212' : '#f5f5f5';
+
   if (isLive.value && (isVotingOpen.value || currentCompetitorId.value)) {
     console.warn("Recovering from stuck state on mount...");
     await forceResetLiveState();
@@ -849,6 +852,7 @@ onUnmounted(() => {
 
 <style scoped>
 .control-room { font-family: Arial, sans-serif; max-width: 1000px; margin: 0 auto; padding: 20px; background-color: #f5f5f5; color: #333; min-height: 100vh; transition: all 0.3s ease; }
+.control-room.dark-theme { background-color: #121212; color: #e0e0e0; }
 .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .header-controls { display: flex; align-items: center; gap: 15px; }
 .btn-theme { background-color: #e0e0e0; border: none; padding: 8px 15px; border-radius: 20px; cursor: pointer; font-weight: bold; transition: background-color 0.3s; }
@@ -955,4 +959,10 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .dark-theme .judge-score-input:focus { background-color: #1a237e; }
 .dark-theme .judge-indicator.voted { background-color: #388e3c; border-color: #2e7d32; }
 .dark-theme .judge-indicator.voted .judge-score-input { background-color: #1b5e20; color: #a5d6a7; }
+
+/* Dark Theme Text Contrast Adjustments */
+.dark-theme label, .dark-theme p { color: #e0e0e0; }
+.dark-theme .success-message { color: #81c784; }
+.dark-theme .info-message { color: #64b5f6; }
+.dark-theme .instruction-text { color: #90caf9; }
 </style>
