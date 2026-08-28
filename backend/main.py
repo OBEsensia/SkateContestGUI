@@ -34,6 +34,8 @@ from competition_manager import (
     generate_next_phase,
     export_phase_results_to_excel,
     get_global_ranking,
+    export_ranking_pdf,
+    export_startlist_pdf,
     CompetitorRegistration,
     PoolCreateData
 )
@@ -418,6 +420,48 @@ def export_results(
         )
     except Exception as error:
         logger.error(f"Error exporting results: {error}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# NOUVEAU: Génération du PDF des Classements (A4)
+@app.get("/competitions/{competition_id}/categories/{category_id}/export-ranking-pdf/")
+def export_ranking_pdf_endpoint(
+        competition_id: int,
+        category_id: int,
+        phase: str,
+        db_conn: sqlite3.Connection = Depends(get_db_connection)
+) -> FileResponse:
+    try:
+        file_path = f"ranking_{competition_id}_{category_id}_{phase}.pdf"
+        export_ranking_pdf(db_conn, competition_id, category_id, phase, file_path, LOGOS_DIR)
+        return FileResponse(
+            path=file_path,
+            filename=f"Ranking_{phase}.pdf",
+            media_type="application/pdf"
+        )
+    except Exception as error:
+        logger.error(f"Error exporting PDF: {error}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# NOUVEAU: Génération du PDF des Ordres de Passage (A4)
+@app.get("/competitions/{competition_id}/categories/{category_id}/export-startlist-pdf/")
+def export_startlist_pdf_endpoint(
+        competition_id: int,
+        category_id: int,
+        phase: str,
+        db_conn: sqlite3.Connection = Depends(get_db_connection)
+) -> FileResponse:
+    try:
+        file_path = f"startlist_{competition_id}_{category_id}_{phase}.pdf"
+        export_startlist_pdf(db_conn, competition_id, category_id, phase, file_path, LOGOS_DIR)
+        return FileResponse(
+            path=file_path,
+            filename=f"StartList_{phase}.pdf",
+            media_type="application/pdf"
+        )
+    except Exception as error:
+        logger.error(f"Error exporting PDF: {error}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

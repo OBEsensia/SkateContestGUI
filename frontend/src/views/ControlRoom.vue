@@ -74,7 +74,6 @@
             <div v-if="manualAddMessage" class="info-message">{{ manualAddMessage }}</div>
           </div>
 
-          <!-- NOUVEAU : UPLOAD DU LOGO -->
           <div class="logo-box">
             <h3>Event Logo</h3>
             <input type="file" accept="image/*" @change="uploadLogo" />
@@ -83,7 +82,6 @@
                <span v-else class="info-message">No logo selected</span>
             </div>
           </div>
-
         </div>
 
         <div class="skaters-list-container">
@@ -117,6 +115,11 @@
             <option value="Semi-Final">Semi-Final</option>
             <option value="Final">Final</option>
           </select>
+        </div>
+
+        <div class="pdf-controls" v-if="pools.length > 0">
+          <button class="btn theme small" @click="downloadStartListPDF">🖨️ Print Start List</button>
+          <button class="btn theme small" @click="downloadRankingPDF">🏆 Print Ranking</button>
         </div>
       </div>
 
@@ -536,7 +539,6 @@ onMounted(async () => {
   });
 });
 
-// NOUVEAU : Fonction pour récupérer le logo enregistré
 const fetchLogo = async () => {
   if (!competitionId.value) return;
   try {
@@ -554,7 +556,6 @@ const fetchLogo = async () => {
   } catch (error) { console.error(error); }
 };
 
-// NOUVEAU : Fonction pour uploader le logo
 const uploadLogo = async (event) => {
   const file = event.target.files[0];
   if (!file) return;
@@ -715,6 +716,16 @@ const downloadResults = () => {
     return;
   }
   window.location.href = `/competitions/${competitionId.value}/export-results/`;
+};
+
+const downloadStartListPDF = () => {
+  if (!competitionId.value || !selectedCategoryId.value || !selectedPhase.value) return;
+  window.open(`/competitions/${competitionId.value}/categories/${selectedCategoryId.value}/export-startlist-pdf/?phase=${selectedPhase.value}`, '_blank');
+};
+
+const downloadRankingPDF = () => {
+  if (!competitionId.value || !selectedCategoryId.value || !selectedPhase.value) return;
+  window.open(`/competitions/${competitionId.value}/categories/${selectedCategoryId.value}/export-ranking-pdf/?phase=${selectedPhase.value}`, '_blank');
 };
 
 const fetchRegisteredSkaters = async () => {
@@ -935,14 +946,17 @@ onUnmounted(() => {
 .card-inner { background-color: #f9f9f9; border: 1px solid #ddd; padding: 15px; border-radius: 6px; margin-bottom: 20px; }
 
 .live-start-options { display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap; }
-.sandbox-filters, .live-context-bar { display: flex; gap: 20px; background: #e3f2fd; padding: 15px; border-radius: 8px; margin-bottom: 20px; align-items: flex-end; flex-wrap: wrap; }
+.sandbox-filters, .live-context-bar { display: flex; gap: 20px; background: #e3f2fd; padding: 15px; border-radius: 8px; margin-bottom: 20px; align-items: flex-end; flex-wrap: wrap; position: relative; }
+.pdf-controls { display: flex; gap: 10px; margin-left: auto; }
+.btn.theme { background-color: #424242; color: white; border: 1px solid #666; }
+.btn.theme:hover { background-color: #555; }
+
 .pool-controls { display: flex; gap: 10px; margin-bottom: 20px; }
 .pools-grid, .live-pools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
 .pool-card { background: #fff; border: 1px solid #ccc; border-radius: 6px; padding: 15px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); transition: background-color 0.3s ease; }
 .unassigned-pool { border: 2px dashed #ff9800; background: #fff3e0; }
 .pool-card h3 { margin-top: 0; padding-bottom: 10px; border-bottom: 1px solid #eee; font-size: 1.1rem; }
 
-/* Drag and Drop styling */
 .drag-instruction { font-style: italic; color: #1976d2; margin-bottom: 10px; font-size: 0.9rem; }
 .draggable-item { cursor: grab; padding: 8px; border: 1px solid transparent; transition: all 0.2s ease; border-radius: 4px; }
 .draggable-item:hover { background-color: #f0f0f0; border: 1px dashed #bbb; }
