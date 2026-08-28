@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import sqlite3
+import glob
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional, Any, Iterator
 
@@ -32,6 +33,7 @@ from competition_manager import (
     get_phase_ranking,
     generate_next_phase,
     export_phase_results_to_excel,
+    get_global_ranking,
     CompetitorRegistration,
     PoolCreateData
 )
@@ -328,6 +330,19 @@ def get_rankings(
         raise HTTPException(status_code=500, detail="Database error")
 
 
+@app.get("/competitions/{competition_id}/categories/{category_id}/global-ranking/")
+def get_global_rankings(
+        competition_id: int,
+        category_id: int,
+        db_conn: sqlite3.Connection = Depends(get_db_connection)
+) -> List[Dict[str, Any]]:
+    try:
+        return get_global_ranking(db_conn, competition_id, category_id)
+    except Exception as error:
+        logger.error(f"Error fetching global rankings: {error}")
+        raise HTTPException(status_code=500, detail="Database error")
+
+
 @app.post("/competitions/{competition_id}/categories/{category_id}/generate-phase/")
 def generate_phase(
         competition_id: int,
@@ -566,7 +581,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 })
 
             elif action == "close_event":
-                # Purge totale de la mémoire du serveur
                 global_manager.cached_meta = {}
                 global_manager.cached_run = {}
                 global_manager.cached_voting = {}
@@ -575,7 +589,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 global_manager.received_scores = {}
                 global_manager.history_scores = {}
 
-                # Signal de nettoyage aux écrans
                 await global_manager.broadcast_json({
                     "type": "board_reset"
                 })

@@ -136,19 +136,16 @@ def create_pool(db_connection: sqlite3.Connection, pool_data: PoolCreateData) ->
 def assign_competitor_to_pool(db_connection: sqlite3.Connection, pool_id: int, competitor_id: int,
                               start_order: int) -> None:
     cursor = db_connection.cursor()
-    # 1. Identifier la phase de la nouvelle poule pour éviter les doublons dans une même phase
     cursor.execute("SELECT phase FROM pool WHERE id = ?", (pool_id,))
     row = cursor.fetchone()
     if not row: return
     phase = row[0]
 
-    # 2. Supprimer toute affectation existante pour ce skateur dans cette phase
     cursor.execute("""
         DELETE FROM pool_competitor 
         WHERE competitor_id = ? AND pool_id IN (SELECT id FROM pool WHERE phase = ?)
     """, (competitor_id, phase))
 
-    # 3. Insérer la nouvelle affectation
     query = "INSERT INTO pool_competitor (pool_id, competitor_id, start_order) VALUES (?, ?, ?)"
     cursor.execute(query, (pool_id, competitor_id, start_order))
     db_connection.commit()
@@ -164,10 +161,7 @@ def unassign_competitor_from_phase(db_connection: sqlite3.Connection, competitor
 
 
 def auto_generate_qualifications(db_connection: sqlite3.Connection, competition_id: int, category_id: int) -> int:
-    """Distribue automatiquement les skateurs en poules optimisées (3 ou 4) selon l'ordre d'import."""
     cursor = db_connection.cursor()
-
-    # Récupérer les skateurs dans l'ordre de création (ID croissant = ordre d'import Excel)
     cursor.execute("""
         SELECT id FROM competitor 
         WHERE competition_id = ? AND category_id = ? 
@@ -179,17 +173,14 @@ def auto_generate_qualifications(db_connection: sqlite3.Connection, competition_
     if total_skaters == 0:
         return 0
 
-    # Calcul algorithmique de la répartition (Max 5, cible 3 ou 4)
     if total_skaters <= 5:
         sizes = [total_skaters]
     else:
         num_pools = math.ceil(total_skaters / 4.0)
         base_size = total_skaters // num_pools
         remainder = total_skaters % num_pools
-        # Ex pour 14 : ceil(14/4)=4. base=3, rem=2. -> [4, 4, 3, 3]
         sizes = [base_size + 1] * remainder + [base_size] * (num_pools - remainder)
 
-    # Nettoyage des poules de qualification existantes (Reset propre)
     cursor.execute("DELETE FROM pool WHERE competition_id = ? AND category_id = ? AND phase = 'Qualifications'",
                    (competition_id, category_id))
     db_connection.commit()
@@ -416,3 +407,85 @@ def export_phase_results_to_excel(db_connection: sqlite3.Connection, competition
 
     workbook.save(file_path)
     logger.info(f"Results exported successfully to {file_path}")
+
+
+def get_global_ranking(db_connection: sqlite3.Connection, competition_id: int, category_id: int) -> List[
+    Dict[str, Any]]:
+    """Generates the absolute final ranking: Finalists > Semi-Finalists > Qualifications"""
+    cursor = db_connection.cursor()
+
+    # 1. Fetch highest phase reached and best score for each competitor
+    query = """
+        SELECT c.id, c.first_name, c.last_name, c.nationality,
+               p.phase,
+               COALESCE(MAX(r.final_score), 0.0) as best_score
+        FROM competitor c
+        JOIN pool_competitor pc ON c.id = pc.competitor_id
+        JOIN pool p ON pc.pool_id = p.id
+        LEFT JOIN run r ON c.id = r.competitor_id AND r.phase = p.phase
+        WHERE c.competition_id = ? AND c.category_id = ?
+        GROUP BY c.id, p.phase
+    """
+    cursor.execute(query, (competition_id, category_id))
+    rows = cursor.fetchall()
+
+    # Assign weights to ensure Finalists > Semi-Finalists > Qualifications
+    phase_weight = {"Final": 3, "Semi-Final": 2, "Qualifications": 1}
+    comp_data = {}
+
+    for row in rows:
+        c_id, f_name, l_name, nat, phase, best_score = row
+        weight = phase_weight.get(phase, 0)
+
+        # Only keep the highest phase data for each skater
+        if c_id not in comp_data or weight > comp_data[c_id]['weight']:
+            comp_data[c_id] = {
+                "competitor_id": c_id, "first_name": f_name, "last_name": l_name,
+                "nationality": nat, "phase": phase, "weight": weight, "best_score": best_score
+            }
+        elif weight == comp_data[c_id]['weight'] and best_score > comp_data[c_id]['best_score']:
+            comp_data[c_id]['best_score'] = best_score
+
+    # 2. Retrieve specific run scores for their final phase
+    cursor.execute("""
+        SELECT competitor_id, phase, run_number, final_score
+        FROM run
+        WHERE competitor_id IN (SELECT id FROM competitor WHERE competition_id = ? AND category_id = ?)
+    """, (competition_id, category_id))
+    all_runs = cursor.fetchall()
+
+    runs_by_comp_phase = {}
+    for c_id, phase, r_num, f_score in all_runs:
+        if c_id not in runs_by_comp_phase:
+            runs_by_comp_phase[c_id] = {}
+        if phase not in runs_by_comp_phase[c_id]:
+            runs_by_comp_phase[c_id][phase] = {}
+        runs_by_comp_phase[c_id][phase][r_num] = f_score
+
+    # 3. Sort array: Highest phase first, then highest score
+    skaters_list = list(comp_data.values())
+    skaters_list.sort(key=lambda x: (x['weight'], x['best_score']), reverse=True)
+
+    # 4. Format Output
+    ranking = []
+    rank_counter = 1
+    for skater in skaters_list:
+        c_id = skater['competitor_id']
+        phase = skater['phase']
+        is_dns = (skater['best_score'] < 0)
+        c_runs = runs_by_comp_phase.get(c_id, {}).get(phase, {})
+
+        ranking.append({
+            "rank": "-" if is_dns else rank_counter,
+            "competitor_id": c_id,
+            "first_name": skater['first_name'],
+            "last_name": skater['last_name'],
+            "nationality": skater['nationality'],
+            "best_score": skater['best_score'],
+            "run_scores": c_runs,
+            "highest_phase": phase  # Inject the highest phase for the UI
+        })
+        if not is_dns:
+            rank_counter += 1
+
+    return ranking

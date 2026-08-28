@@ -48,6 +48,17 @@
             </thead>
             <tbody>
               <template v-for="(entry, index) in leaderboard" :key="index">
+
+                <!-- SÉPARATION DOUBLÉE LORS DU CHANGEMENT DE PHASE -->
+                <tr v-if="index > 0 && entry.highest_phase !== leaderboard[index - 1].highest_phase" class="phase-separator-row">
+                  <td :colspan="4 + maxRuns">
+                    <div class="double-line-container">
+                      <span>ELIMINATED IN {{ entry.highest_phase }}</span>
+                    </div>
+                  </td>
+                </tr>
+
+                <!-- LIGNE DU SKATEUR -->
                 <tr :class="{'dns-row': entry.score < 0}">
                   <td class="col-rank">
                     <span v-if="entry.score >= 0" class="rank-badge" :class="'rank-' + (index + 1)">{{ index + 1 }}</span>
@@ -55,14 +66,24 @@
                   </td>
                   <td class="col-skater">
                     <div class="lb-skater-name">{{ entry.name }}</div>
-                    <div class="lb-meta">{{ entry.nationality }} - {{ entry.category }}</div>
+                    <div class="lb-meta">
+                      {{ entry.nationality }} - {{ entry.category }}
+                      <span v-if="entry.highest_phase" class="phase-badge">{{ entry.highest_phase }}</span>
+                    </div>
                   </td>
+
+                  <!-- AFFICHAGE DYNAMIQUE DES MANCHES -->
                   <td class="col-run" v-for="i in maxRuns" :key="'td'+i">
-                    <span v-if="entry.run_scores && entry.run_scores[i] !== undefined" :class="{'dns-text': entry.run_scores[i] < 0}">
-                      {{ entry.run_scores[i] < 0 ? 'DNS' : entry.run_scores[i].toFixed(2) }}
+                    <span v-if="entry.run_scores && entry.run_scores[i] !== undefined && entry.run_scores[i] >= 0">
+                      {{ entry.run_scores[i].toFixed(2) }}
                     </span>
+                    <span v-else-if="entry.run_scores && entry.run_scores[i] < 0" class="dns-text">
+                      DNS
+                    </span>
+                    <!-- Manche non concourue (-) -->
                     <span v-else class="run-empty">-</span>
                   </td>
+
                   <td class="col-score highlight">
                     <span v-if="entry.score < 0" class="dns-text">DNS</span>
                     <span v-else>{{ entry.score.toFixed(2) }}</span>
@@ -321,6 +342,11 @@ onUnmounted(() => { if (socket) socket.close(); });
 .dns-text { color: #ff5252; font-weight: bold; font-style: italic; }
 .dns-badge { background-color: #d32f2f !important; color: white !important; }
 
+/* Styles de séparation de Phase (Podium mode) */
+.phase-separator-row td { padding: 0 !important; border: none !important; background-color: transparent !important; }
+.double-line-container { display: flex; align-items: center; text-align: center; color: #ffb74d; font-weight: bold; font-size: 1rem; letter-spacing: 4px; text-transform: uppercase; margin: 15px 0; }
+.double-line-container::before, .double-line-container::after { content: ''; flex: 1; border-top: 4px double #666; margin: 0 15px; }
+
 .cut-line-row td { padding: 0 !important; border: none !important; }
 .cut-line { display: flex; align-items: center; text-align: center; color: #ff5252; font-weight: bold; font-size: 0.8rem; letter-spacing: 2px; margin: 10px 0; }
 .cut-line::before, .cut-line::after { content: ''; flex: 1; border-bottom: 2px dashed #ff5252; }
@@ -331,13 +357,17 @@ onUnmounted(() => { if (socket) socket.close(); });
 .rank-2 { background-color: #c0c0c0; color: #000; }
 .rank-3 { background-color: #cd7f32; color: #000; }
 .lb-skater-name { font-weight: bold; font-size: 1.1rem; color: #fff; margin-bottom: 4px; text-transform: uppercase; }
-.lb-meta { font-size: 0.85rem; color: #888; }
+.lb-meta { font-size: 0.85rem; color: #888; display: flex; align-items: center; gap: 8px; }
 .col-score.highlight { font-weight: bold; color: #4caf50; font-size: 1.2rem; text-align: right; }
 .empty-state { text-align: center !important; color: #666; padding: 30px !important; font-style: italic; }
 
+.phase-badge { display: inline-block; padding: 2px 6px; background-color: rgba(25, 118, 210, 0.15); color: #64b5f6; border-radius: 4px; font-size: 0.7rem; font-weight: bold; text-transform: uppercase; border: 1px solid rgba(25, 118, 210, 0.3); }
+
+/* PODIUM VIEW */
 .podium-view { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; background: radial-gradient(circle at top, #1a1a1a 0%, #0a0a0a 100%); padding: 40px; overflow-y: auto; }
-.podium-title { font-size: 3rem; letter-spacing: 4px; color: #ffd700; margin-bottom: 40px; text-transform: uppercase; text-shadow: 0 0 20px rgba(255, 215, 0, 0.4); }
-.podium-podium-container { display: flex; align-items: flex-end; justify-content: center; gap: 30px; width: 100%; max-width: 800px; height: 350px; margin-bottom: 40px; }
+.podium-title { font-size: 2.5rem; letter-spacing: 3px; color: #ffd700; margin-bottom: 40px; text-transform: uppercase; text-shadow: 0 0 20px rgba(255, 215, 0, 0.4); text-align: center; }
+
+.podium-podium-container { display: flex; align-items: flex-end; justify-content: center; gap: 30px; width: 100%; max-width: 800px; height: 350px; margin-bottom: 20px; }
 .podium-step { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; border-radius: 12px 12px 0 0; padding: 20px; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.5); animation: slideUp 0.8s ease-out forwards; }
 .rank-1-step { background: linear-gradient(to top, #b7950b, #d4ac0d); height: 100%; border: 2px solid #f1c40f; }
 .rank-2-step { background: linear-gradient(to top, #7f8c8d, #95a5a6); height: 75%; border: 2px solid #bdc3c7; }
