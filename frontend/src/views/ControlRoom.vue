@@ -321,10 +321,85 @@
 
       <hr style="margin: 30px 0;" />
 
-      <div class="podium-control-panel">
+      <!-- LEADERBOARD AVEC ÉDITION -->
+      <div class="leaderboard-panel card">
+        <h2>Live Leaderboard</h2>
+        <div class="table-responsive">
+          <table class="leaderboard-table">
+            <thead>
+              <tr>
+                <th class="col-rank">Rank</th>
+                <th class="col-skater">Skater</th>
+                <th class="col-run" v-for="i in maxRuns" :key="'th'+i">Run {{ i }}</th>
+                <th class="col-score">Best Score</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template v-for="(entry, index) in liveLeaderboard" :key="index">
+                <tr :class="{'dns-row': entry.score < 0}">
+                  <td class="col-rank">
+                    <span v-if="entry.score >= 0" class="rank-badge">{{ index + 1 }}</span>
+                    <span v-else class="rank-badge dns-badge">-</span>
+                  </td>
+                  <td class="col-skater">
+                    <div class="lb-skater-name">{{ entry.name }}</div>
+                    <div class="lb-meta">{{ entry.nationality }} - {{ entry.category }}</div>
+                  </td>
+
+                  <!-- NOUVEAU : Colonne de Run avec bouton d'édition discret -->
+                  <td class="col-run" v-for="i in maxRuns" :key="'td'+i">
+                    <div class="run-score-cell">
+                        <span v-if="entry.run_scores && entry.run_scores[i] !== undefined && entry.run_scores[i] >= 0">
+                          {{ entry.run_scores[i].toFixed(2) }}
+                          <button class="edit-icon-btn" @click="openEditModal(entry, i)" title="Quick Edit">✏️</button>
+                        </span>
+                        <span v-else-if="entry.run_scores && entry.run_scores[i] < 0" class="dns-text">
+                          DNS
+                          <button class="edit-icon-btn" @click="openEditModal(entry, i)" title="Quick Edit">✏️</button>
+                        </span>
+                        <span v-else class="run-empty">-</span>
+                    </div>
+                  </td>
+
+                  <td class="col-score highlight">
+                    <span v-if="entry.score < 0" class="dns-text">DNS</span>
+                    <span v-else>{{ entry.score.toFixed(2) }}</span>
+                  </td>
+                </tr>
+              </template>
+              <tr v-if="liveLeaderboard.length === 0">
+                <td :colspan="3 + maxRuns" class="empty-state">No scores recorded yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="podium-control-panel" style="margin-top: 20px;">
         <button class="btn success large wide" @click="triggerPodium">🏆 SHOW PODIUM (END CONTEST)</button>
       </div>
     </section>
+
+    <!-- FENÊTRE MODALE DE QUICK EDIT -->
+    <div class="modal-overlay" v-if="isEditModalOpen" @click.self="isEditModalOpen = false">
+      <div class="modal-content">
+        <h3 class="modal-title">Edit Scores</h3>
+        <p class="modal-subtitle">{{ editSkaterName }} - Run {{ editRunNumber }}</p>
+
+        <div class="edit-judges-list">
+          <div class="form-group edit-judge-row" v-for="j in judgeCount" :key="'edit'+j">
+            <label>Judge {{ j }}:</label>
+            <input type="number" v-model.number="editScores[j]" min="0" max="100" step="0.1" />
+          </div>
+        </div>
+
+        <div class="modal-actions" style="margin-top: 20px; display: flex; gap: 10px; justify-content: flex-end;">
+          <button class="btn" @click="isEditModalOpen = false">Cancel</button>
+          <button class="btn success" @click="saveEditedScores">Save & Broadcast</button>
+        </div>
+      </div>
+    </div>
+
   </div>
 </template>
 
@@ -448,6 +523,13 @@ const finalScore = ref(null);
 const organizerScores = ref({});
 
 let socket = null;
+
+// NOUVELLES VARIABLES POUR LE QUICK EDIT
+const isEditModalOpen = ref(false);
+const editSkaterName = ref('');
+const editCompetitorId = ref(null);
+const editRunNumber = ref(null);
+const editScores = ref({});
 
 const unassignedSkaters = computed(() => {
   if (!selectedCategoryId.value) return [];
@@ -800,7 +882,10 @@ const startLiveEvent = async () => {
   socket.onmessage = async (event) => {
     try {
       const payload = JSON.parse(event.data);
-      if (payload.type === 'new_run') {
+      if (payload.type === 'leaderboard_updated') {
+        liveLeaderboard.value = payload.leaderboard;
+      }
+      else if (payload.type === 'new_run') {
         if (payload.previous_scores) {
           receivedScores.value = Object.keys(payload.previous_scores).map(Number);
         } else {
@@ -918,6 +1003,53 @@ const submitIndividualScore = (judgeId) => {
   }));
 };
 
+// NOUVELLES FONCTIONS POUR LE QUICK EDIT
+const openEditModal = async (skaterEntry, runNum) => {
+  editSkaterName.value = skaterEntry.name;
+  editCompetitorId.value = skaterEntry.id;
+  editRunNumber.value = runNum;
+  editScores.value = {};
+
+  // Initialisation à blanc
+  for(let i=1; i<=judgeCount.value; i++) {
+      editScores.value[i] = 0.0;
+  }
+
+  try {
+      const res = await fetch(`/competitions/${competitionId.value}/competitors/${skaterEntry.id}/scores/?phase=${selectedPhase.value}&run_number=${runNum}`);
+      if (res.ok) {
+          const data = await res.json();
+          for (const [jId, val] of Object.entries(data)) {
+              editScores.value[jId] = val;
+          }
+      }
+  } catch(e) { console.error(e) }
+
+  isEditModalOpen.value = true;
+};
+
+const saveEditedScores = async () => {
+  try {
+      const res = await fetch('/edit-score/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+              competition_id: competitionId.value,
+              category_id: selectedCategoryId.value,
+              competitor_id: editCompetitorId.value,
+              phase: selectedPhase.value,
+              run_number: editRunNumber.value,
+              scores: editScores.value
+          })
+      });
+      if (res.ok) {
+          isEditModalOpen.value = false;
+          await fetchPools();
+          await refreshLiveLeaderboard();
+      }
+  } catch(e) { console.error(e); }
+};
+
 watch(currentRunNumber, () => {
   if (isLive.value) fetchPools();
 });
@@ -984,44 +1116,12 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .success-message { color: #2e7d32; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; }
 .info-message { color: #1976d2; font-style: italic; margin-top: 10px; }
 
-.split-panel {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 20px;
-  margin-top: 20px;
-}
-@media (max-width: 850px) {
-  .split-panel { grid-template-columns: 1fr; }
-}
-
-.import-box, .manual-box, .logo-box {
-  background: #f9f9f9;
-  padding: 15px;
-  border-radius: 8px;
-  border: 1px solid #ddd;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
+.split-panel { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 20px; }
+@media (max-width: 850px) { .split-panel { grid-template-columns: 1fr; } }
+.import-box, .manual-box, .logo-box { background: #f9f9f9; padding: 15px; border-radius: 8px; border: 1px solid #ddd; display: flex; flex-direction: column; overflow: hidden; }
 .input-row-small { display: flex; flex-direction: column; gap: 10px; }
-.preview-container {
-  margin-top: auto;
-  height: 120px;
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0,0,0,0.05);
-  border-radius: 6px;
-  padding: 10px;
-  box-sizing: border-box;
-}
-.preview-logo {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-}
+.preview-container { margin-top: auto; height: 120px; width: 100%; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.05); border-radius: 6px; padding: 10px; box-sizing: border-box; }
+.preview-logo { max-width: 100%; max-height: 100%; object-fit: contain; }
 
 .skaters-list-container { margin-top: 20px; background: #fff; border: 1px solid #eee; padding: 15px; border-radius: 8px; clear: both; }
 .skaters-list { list-style: none; padding: 0; max-height: 200px; overflow-y: auto; }
@@ -1052,6 +1152,22 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .judge-indicator.voted { background-color: #4caf50; border-color: #388e3c; }
 .judge-indicator.voted .judge-header { color: #fff; background-color: rgba(0,0,0,0.1); }
 .judge-indicator.voted .judge-score-input { background-color: #e8f5e9; color: #2e7d32; }
+
+.leaderboard-table { width: 100%; min-width: 400px; border-collapse: collapse; margin-top: 15px; }
+.leaderboard-table th, .leaderboard-table td { padding: 15px; text-align: left; border-bottom: 1px solid #ccc; }
+.leaderboard-table th { color: #555; text-transform: uppercase; font-size: 0.9rem; }
+
+/* QUICK EDIT STYLES */
+.run-score-cell { display: flex; align-items: center; gap: 8px; }
+.edit-icon-btn { background: none; border: none; cursor: pointer; opacity: 0.3; transition: opacity 0.2s; font-size: 0.9rem; padding: 0; }
+.edit-icon-btn:hover { opacity: 1; }
+
+.modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.modal-content { background: #fff; padding: 30px; border-radius: 8px; width: 400px; max-width: 90vw; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+.modal-title { margin-top: 0; color: #1976d2; margin-bottom: 5px; }
+.modal-subtitle { color: #666; font-style: italic; margin-bottom: 20px; }
+.edit-judge-row { flex-direction: row !important; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 10px; }
+.edit-judge-row input { width: 100px; text-align: center; font-size: 1.2rem; font-weight: bold; }
 
 /* Dark Theme Adjustments */
 .dark-theme .card { background: #1e1e1e; box-shadow: 0 2px 8px rgba(0,0,0,0.5); }
@@ -1088,4 +1204,8 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .dark-theme .success-message { color: #81c784; }
 .dark-theme .info-message { color: #64b5f6; }
 .dark-theme .instruction-text { color: #90caf9; }
+.dark-theme .leaderboard-table th { color: #aaa; }
+.dark-theme .leaderboard-table td { border-bottom-color: #333; }
+.dark-theme .modal-content { background: #1e1e1e; border: 1px solid #444; }
+.dark-theme .edit-judge-row { border-bottom-color: #333; }
 </style>

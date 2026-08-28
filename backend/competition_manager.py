@@ -618,3 +618,49 @@ def export_startlist_pdf(db_connection: sqlite3.Connection, competition_id: int,
         pdf.ln(5)
 
     pdf.output(file_path)
+
+
+# (Garder tout le reste de votre code existant au-dessus, et ajouter ceci à la fin)
+
+def get_individual_scores(db_connection: sqlite3.Connection, competitor_id: int, phase: str, run_number: int) -> Dict[
+    int, float]:
+    """Récupère les notes individuelles des juges pour un run précis."""
+    cursor = db_connection.cursor()
+    cursor.execute("""
+        SELECT s.judge_id, s.score_value 
+        FROM score s
+        JOIN run r ON s.run_id = r.id
+        WHERE r.competitor_id = ? AND r.phase = ? AND r.run_number = ?
+    """, (competitor_id, phase, run_number))
+    return {row[0]: row[1] for row in cursor.fetchall()}
+
+
+def update_run_scores(db_connection: sqlite3.Connection, competitor_id: int, phase: str, run_number: int,
+                      scores_dict: Dict[int, float]) -> float:
+    """Met à jour les notes individuelles, recalcule la moyenne et sauvegarde."""
+    cursor = db_connection.cursor()
+
+    # Trouver l'ID du run
+    cursor.execute("SELECT id FROM run WHERE competitor_id=? AND phase=? AND run_number=?",
+                   (competitor_id, phase, run_number))
+    row = cursor.fetchone()
+    if not row:
+        raise ValueError("Run introuvable dans la base.")
+    run_id = row[0]
+
+    # Mettre à jour chaque juge (UPSERT)
+    for j_id, s_val in scores_dict.items():
+        cursor.execute("""
+            INSERT INTO score (run_id, judge_id, score_value)
+            VALUES (?, ?, ?)
+            ON CONFLICT(run_id, judge_id) DO UPDATE SET score_value=excluded.score_value
+        """, (run_id, int(j_id), float(s_val)))
+
+    # Recalculer la nouvelle moyenne
+    cursor.execute("SELECT AVG(score_value) FROM score WHERE run_id=?", (run_id,))
+    new_avg = cursor.fetchone()[0]
+
+    # Mettre à jour le score final du run
+    cursor.execute("UPDATE run SET final_score=? WHERE id=?", (new_avg, run_id))
+    db_connection.commit()
+    return new_avg

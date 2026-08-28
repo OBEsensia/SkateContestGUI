@@ -37,7 +37,9 @@ from competition_manager import (
     export_ranking_pdf,
     export_startlist_pdf,
     CompetitorRegistration,
-    PoolCreateData
+    PoolCreateData,
+    get_individual_scores,
+    update_run_scores
 )
 
 import mimetypes
@@ -109,6 +111,15 @@ class GeneratePhaseRequest(BaseModel):
     next_phase: str
     top_n: int
     pools_count: int
+
+
+class EditScoreRequest(BaseModel):
+    competition_id: int
+    category_id: int
+    competitor_id: int
+    phase: str
+    run_number: int
+    scores: Dict[int, float]
 
 
 @app.post("/competitions/")
@@ -423,7 +434,7 @@ def export_results(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-# NOUVEAU: Génération du PDF des Classements (A4)
+# Génération du PDF des Classements (A4)
 @app.get("/competitions/{competition_id}/categories/{category_id}/export-ranking-pdf/")
 def export_ranking_pdf_endpoint(
         competition_id: int,
@@ -444,7 +455,7 @@ def export_ranking_pdf_endpoint(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-# NOUVEAU: Génération du PDF des Ordres de Passage (A4)
+# Génération du PDF des Ordres de Passage (A4)
 @app.get("/competitions/{competition_id}/categories/{category_id}/export-startlist-pdf/")
 def export_startlist_pdf_endpoint(
         competition_id: int,
@@ -463,6 +474,41 @@ def export_startlist_pdf_endpoint(
     except Exception as error:
         logger.error(f"Error exporting PDF: {error}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@app.get("/competitions/{competition_id}/competitors/{competitor_id}/scores/")
+def api_get_scores(competitor_id: int, phase: str, run_number: int,
+                   db_conn: sqlite3.Connection = Depends(get_db_connection)):
+    return get_individual_scores(db_conn, competitor_id, phase, run_number)
+
+
+@app.post("/edit-score/")
+async def api_edit_score(req: EditScoreRequest):
+    # Ouvrir la connexion manuellement dans le thread de l'event loop
+    db_conn = get_connection()
+    try:
+        update_run_scores(db_conn, req.competitor_id, req.phase, req.run_number, req.scores)
+
+        # Forcer la MAJ de l'écran public silencieusement
+        ranking = get_phase_ranking(db_conn, req.competition_id, req.category_id, req.phase)
+        cursor = db_conn.cursor()
+        cursor.execute("SELECT name FROM category WHERE id=?", (req.category_id,))
+        cat_row = cursor.fetchone()
+        cat_name = cat_row[0] if cat_row else ""
+
+        formatted_ranking = [{
+            "id": r["competitor_id"],
+            "name": f"{r['first_name']} {r['last_name']}",
+            "score": r["best_score"],
+            "run_scores": r["run_scores"],
+            "nationality": r["nationality"],
+            "category": cat_name
+        } for r in ranking]
+
+        await global_manager.broadcast_json({"type": "leaderboard_updated", "leaderboard": formatted_ranking})
+        return {"status": "success"}
+    finally:
+        db_conn.close()
 
 
 class ConnectionManager:
@@ -602,11 +648,13 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 db_conn = get_connection()
                 cursor = db_conn.cursor()
-                cursor.execute(
-                    "INSERT OR REPLACE INTO run (competitor_id, phase, run_number, final_score) VALUES (?, ?, ?, ?)",
-                    (global_manager.cached_run.get("competitor_id"), global_manager.cached_run.get("phase"),
-                     global_manager.cached_run.get("run_number"), -1.0)
-                )
+                cursor.execute("""
+                                    INSERT INTO run (competitor_id, phase, run_number, final_score) 
+                                    VALUES (?, ?, ?, ?)
+                                    ON CONFLICT(competitor_id, phase, run_number) DO UPDATE SET final_score=excluded.final_score
+                                """, (
+                global_manager.cached_run.get("competitor_id"), global_manager.cached_run.get("phase"),
+                global_manager.cached_run.get("run_number"), -1.0))
                 db_conn.commit()
                 db_conn.close()
 
@@ -645,11 +693,28 @@ async def websocket_endpoint(websocket: WebSocket):
 
                     db_conn = get_connection()
                     cursor = db_conn.cursor()
-                    cursor.execute(
-                        "INSERT OR REPLACE INTO run (competitor_id, phase, run_number, final_score) VALUES (?, ?, ?, ?)",
-                        (global_manager.cached_run.get("competitor_id"), global_manager.cached_run.get("phase"),
-                         global_manager.cached_run.get("run_number"), final_score)
-                    )
+                    comp_id = global_manager.cached_run.get("competitor_id")
+                    phase = global_manager.cached_run.get("phase")
+                    run_num = global_manager.cached_run.get("run_number")
+
+                    # 1. Sauvegarde du run
+                    cursor.execute("""
+                                            INSERT INTO run (competitor_id, phase, run_number, final_score) 
+                                            VALUES (?, ?, ?, ?)
+                                            ON CONFLICT(competitor_id, phase, run_number) DO UPDATE SET final_score=excluded.final_score
+                                        """, (comp_id, phase, run_num, final_score))
+
+                    cursor.execute("SELECT id FROM run WHERE competitor_id=? AND phase=? AND run_number=?",
+                                   (comp_id, phase, run_num))
+                    run_id = cursor.fetchone()[0]
+
+                    # 2. SAUVEGARDE DES NOTES INDIVIDUELLES
+                    for j_id, s_val in global_manager.received_scores.items():
+                        cursor.execute("""
+                                                INSERT INTO score (run_id, judge_id, score_value)
+                                                VALUES (?, ?, ?)
+                                                ON CONFLICT(run_id, judge_id) DO UPDATE SET score_value=excluded.score_value
+                                            """, (run_id, int(j_id), float(s_val)))
                     db_conn.commit()
                     db_conn.close()
 
