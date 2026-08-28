@@ -1,10 +1,17 @@
 import logging
 import sqlite3
 import math
+import os
+import glob
 from dataclasses import dataclass
 from typing import Optional, Dict, List, Any
 import openpyxl
 from openpyxl.styles import Font, PatternFill
+
+try:
+    from fpdf import FPDF
+except ImportError:
+    FPDF = None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -136,19 +143,16 @@ def create_pool(db_connection: sqlite3.Connection, pool_data: PoolCreateData) ->
 def assign_competitor_to_pool(db_connection: sqlite3.Connection, pool_id: int, competitor_id: int,
                               start_order: int) -> None:
     cursor = db_connection.cursor()
-    # 1. Identifier la phase de la nouvelle poule pour éviter les doublons dans une même phase
     cursor.execute("SELECT phase FROM pool WHERE id = ?", (pool_id,))
     row = cursor.fetchone()
     if not row: return
     phase = row[0]
 
-    # 2. Supprimer toute affectation existante pour ce skateur dans cette phase
     cursor.execute("""
         DELETE FROM pool_competitor 
         WHERE competitor_id = ? AND pool_id IN (SELECT id FROM pool WHERE phase = ?)
     """, (competitor_id, phase))
 
-    # 3. Insérer la nouvelle affectation
     query = "INSERT INTO pool_competitor (pool_id, competitor_id, start_order) VALUES (?, ?, ?)"
     cursor.execute(query, (pool_id, competitor_id, start_order))
     db_connection.commit()
@@ -164,10 +168,7 @@ def unassign_competitor_from_phase(db_connection: sqlite3.Connection, competitor
 
 
 def auto_generate_qualifications(db_connection: sqlite3.Connection, competition_id: int, category_id: int) -> int:
-    """Distribue automatiquement les skateurs en poules optimisées (3 ou 4) selon l'ordre d'import."""
     cursor = db_connection.cursor()
-
-    # Récupérer les skateurs dans l'ordre de création (ID croissant = ordre d'import Excel)
     cursor.execute("""
         SELECT id FROM competitor 
         WHERE competition_id = ? AND category_id = ? 
@@ -179,17 +180,14 @@ def auto_generate_qualifications(db_connection: sqlite3.Connection, competition_
     if total_skaters == 0:
         return 0
 
-    # Calcul algorithmique de la répartition (Max 5, cible 3 ou 4)
     if total_skaters <= 5:
         sizes = [total_skaters]
     else:
         num_pools = math.ceil(total_skaters / 4.0)
         base_size = total_skaters // num_pools
         remainder = total_skaters % num_pools
-        # Ex pour 14 : ceil(14/4)=4. base=3, rem=2. -> [4, 4, 3, 3]
         sizes = [base_size + 1] * remainder + [base_size] * (num_pools - remainder)
 
-    # Nettoyage des poules de qualification existantes (Reset propre)
     cursor.execute("DELETE FROM pool WHERE competition_id = ? AND category_id = ? AND phase = 'Qualifications'",
                    (competition_id, category_id))
     db_connection.commit()
@@ -416,3 +414,207 @@ def export_phase_results_to_excel(db_connection: sqlite3.Connection, competition
 
     workbook.save(file_path)
     logger.info(f"Results exported successfully to {file_path}")
+
+
+def get_global_ranking(db_connection: sqlite3.Connection, competition_id: int, category_id: int) -> List[
+    Dict[str, Any]]:
+    cursor = db_connection.cursor()
+
+    query = """
+        SELECT c.id, c.first_name, c.last_name, c.nationality,
+               p.phase,
+               COALESCE(MAX(r.final_score), 0.0) as best_score
+        FROM competitor c
+        JOIN pool_competitor pc ON c.id = pc.competitor_id
+        JOIN pool p ON pc.pool_id = p.id
+        LEFT JOIN run r ON c.id = r.competitor_id AND r.phase = p.phase
+        WHERE c.competition_id = ? AND c.category_id = ?
+        GROUP BY c.id, p.phase
+    """
+    cursor.execute(query, (competition_id, category_id))
+    rows = cursor.fetchall()
+
+    phase_weight = {"Final": 3, "Semi-Final": 2, "Qualifications": 1}
+    comp_data = {}
+
+    for row in rows:
+        c_id, f_name, l_name, nat, phase, best_score = row
+        weight = phase_weight.get(phase, 0)
+
+        if c_id not in comp_data or weight > comp_data[c_id]['weight']:
+            comp_data[c_id] = {
+                "competitor_id": c_id, "first_name": f_name, "last_name": l_name,
+                "nationality": nat, "phase": phase, "weight": weight, "best_score": best_score
+            }
+        elif weight == comp_data[c_id]['weight'] and best_score > comp_data[c_id]['best_score']:
+            comp_data[c_id]['best_score'] = best_score
+
+    cursor.execute("""
+        SELECT competitor_id, phase, run_number, final_score
+        FROM run
+        WHERE competitor_id IN (SELECT id FROM competitor WHERE competition_id = ? AND category_id = ?)
+    """, (competition_id, category_id))
+    all_runs = cursor.fetchall()
+
+    runs_by_comp_phase = {}
+    for c_id, phase, r_num, f_score in all_runs:
+        if c_id not in runs_by_comp_phase:
+            runs_by_comp_phase[c_id] = {}
+        if phase not in runs_by_comp_phase[c_id]:
+            runs_by_comp_phase[c_id][phase] = {}
+        runs_by_comp_phase[c_id][phase][r_num] = f_score
+
+    skaters_list = list(comp_data.values())
+    skaters_list.sort(key=lambda x: (x['weight'], x['best_score']), reverse=True)
+
+    ranking = []
+    rank_counter = 1
+    for skater in skaters_list:
+        c_id = skater['competitor_id']
+        phase = skater['phase']
+        is_dns = (skater['best_score'] < 0)
+        c_runs = runs_by_comp_phase.get(c_id, {}).get(phase, {})
+
+        ranking.append({
+            "rank": "-" if is_dns else rank_counter,
+            "competitor_id": c_id,
+            "first_name": skater['first_name'],
+            "last_name": skater['last_name'],
+            "nationality": skater['nationality'],
+            "best_score": skater['best_score'],
+            "run_scores": c_runs,
+            "highest_phase": phase
+        })
+        if not is_dns:
+            rank_counter += 1
+
+    return ranking
+
+
+# --- PDF GENERATION ENGINE ---
+
+if FPDF:
+    class SkateContestPDF(FPDF):
+        def __init__(self, comp_name: str, logo_path: Optional[str], title: str):
+            super().__init__(orientation="P", unit="mm", format="A4")
+            self.comp_name = comp_name
+            self.logo_path = logo_path
+            self.doc_title = title
+
+        def header(self):
+            if self.logo_path and os.path.exists(self.logo_path):
+                try:
+                    self.image(self.logo_path, x=10, y=8, h=20)
+                except Exception as e:
+                    logger.error(f"Could not load logo for PDF: {e}")
+
+            self.set_font("helvetica", "B", 16)
+            self.set_y(15)
+            self.cell(w=0, h=8, text=self.comp_name, align="C", new_x="LMARGIN", new_y="NEXT")
+
+            self.set_font("helvetica", "B", 12)
+            self.cell(w=0, h=8, text=self.doc_title, align="C", new_x="LMARGIN", new_y="NEXT")
+            self.ln(10)
+
+        def footer(self):
+            self.set_y(-15)
+            self.set_font("helvetica", "I", 8)
+            self.cell(w=0, h=10, text=f"Page {self.page_no()}/{{nb}}", align="C")
+
+
+def export_ranking_pdf(db_connection: sqlite3.Connection, competition_id: int, category_id: int, phase: str,
+                       file_path: str, logo_dir: str) -> None:
+    if not FPDF: raise RuntimeError("fpdf2 is not installed.")
+
+    cursor = db_connection.cursor()
+    cursor.execute("SELECT name FROM competition WHERE id=?", (competition_id,))
+    comp_name = cursor.fetchone()[0]
+    cursor.execute("SELECT name FROM category WHERE id=?", (category_id,))
+    cat_name = cursor.fetchone()[0]
+
+    logo_path = None
+    files = glob.glob(os.path.join(logo_dir, f"comp_{competition_id}_logo.*"))
+    if files: logo_path = files[0]
+
+    ranking = get_phase_ranking(db_connection, competition_id, category_id, phase)
+
+    max_run = 0
+    for r in ranking:
+        if r["run_scores"]:
+            max_run = max(max_run, max(r["run_scores"].keys()))
+    max_run = max(2, max_run)
+
+    title = f"RANKING - {phase.upper()} - {cat_name.upper()}"
+    pdf = SkateContestPDF(comp_name, logo_path, title)
+    pdf.alias_nb_pages()
+    pdf.add_page()
+    pdf.set_font("helvetica", size=10)
+
+    with pdf.table(text_align="CENTER") as table:
+        row = table.row()
+        row.cell("Rank")
+        row.cell("Skater", align="LEFT")
+        row.cell("Nat.")
+        for i in range(max_run):
+            row.cell(f"Run {i + 1}")
+        row.cell("Best Score")
+
+        for r in ranking:
+            row = table.row()
+            row.cell(str(r["rank"]))
+            row.cell(f"{r['first_name']} {r['last_name']}", align="LEFT")
+            row.cell(r["nationality"])
+            for i in range(max_run):
+                score = r["run_scores"].get(i + 1, "")
+                if score == -1.0:
+                    row.cell("DNS")
+                elif score != "":
+                    row.cell(f"{score:.2f}")
+                else:
+                    row.cell("-")
+            best = r["best_score"]
+            row.cell("DNS" if best < 0 else f"{best:.2f}")
+
+    pdf.output(file_path)
+
+
+def export_startlist_pdf(db_connection: sqlite3.Connection, competition_id: int, category_id: int, phase: str,
+                         file_path: str, logo_dir: str) -> None:
+    if not FPDF: raise RuntimeError("fpdf2 is not installed.")
+
+    cursor = db_connection.cursor()
+    cursor.execute("SELECT name FROM competition WHERE id=?", (competition_id,))
+    comp_name = cursor.fetchone()[0]
+    cursor.execute("SELECT name FROM category WHERE id=?", (category_id,))
+    cat_name = cursor.fetchone()[0]
+
+    logo_path = None
+    files = glob.glob(os.path.join(logo_dir, f"comp_{competition_id}_logo.*"))
+    if files: logo_path = files[0]
+
+    pools = get_pools_with_competitors(db_connection, competition_id, category_id, phase)
+
+    title = f"START LIST - {phase.upper()} - {cat_name.upper()}"
+    pdf = SkateContestPDF(comp_name, logo_path, title)
+    pdf.alias_nb_pages()
+    pdf.add_page()
+
+    for pool in pools:
+        pdf.set_font("helvetica", "B", 12)
+        pdf.cell(w=0, h=10, text=pool["name"], new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("helvetica", size=10)
+
+        with pdf.table(text_align="CENTER") as table:
+            row = table.row()
+            row.cell("Order")
+            row.cell("Skater", align="LEFT")
+            row.cell("Nat.")
+
+            for skater in pool["competitors"]:
+                row = table.row()
+                row.cell(str(skater["start_order"]))
+                row.cell(f"{skater['first_name']} {skater['last_name']}", align="LEFT")
+                row.cell(skater["nationality"])
+        pdf.ln(5)
+
+    pdf.output(file_path)
