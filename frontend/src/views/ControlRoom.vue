@@ -936,13 +936,15 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .dark-theme .sandbox-filters, .dark-theme .live-context-bar { background: #1a237e; }
 .dark-theme .pool-card { background: #2c2c2c; border-color: #444; }
 .dark-theme .unassigned-pool { border-color: #f57c00; background: #3e2723; }
-.dark-theme .skater-assign-list li { border-bottom-color: #444; }
 .dark-theme .draggable-item:hover { background-color: #3a3a3a; border-color: #666; }
 .dark-theme .auto-generate-box { background: #1b5e20; border-color: #2e7d32; }
 .dark-theme .active-skater { background-color: #4a401a; border-left-color: #ffd600; }
 .dark-theme .import-box, .dark-theme .manual-box { background: #2c2c2c; border-color: #444; }
 .dark-theme .skaters-list-container { background: #1e1e1e; border-color: #444; }
-.dark-theme .skaters-list li { border-bottom-color: #333; }
+.dark-theme .skater-assign-list li { border-bottom-color: #444; color: #e0e0e0; }
+.dark-theme .skaters-list li { border-bottom-color: #333; color: #e0e0e0; }
+.dark-theme .empty-list { color: #aaa; }
+.dark-theme .drag-instruction { color: #64b5f6; }
 .dark-theme .result-panel { background-color: #3e2723; border-color: #d84315; }
 .dark-theme .score-display { color: #ffb74d; }
 
