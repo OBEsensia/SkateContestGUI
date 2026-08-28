@@ -272,30 +272,29 @@
         </div>
       </div>
 
-      <div v-if="currentCompetitorId && isVotingOpen && finalScore === null" class="organizer-judge-panel card-inner">
-        <h3>Direct Judge Input (Organizer Backup)</h3>
-        <div class="input-row">
-          <div>
-            <label>Acting as:</label>
-            <select v-model.number="organizerJudgeId">
-              <option v-for="i in judgeCount" :key="i" :value="i">
-                Judge {{ i }}
-              </option>
-            </select>
-          </div>
-          <div>
-            <label>Score (0 - 100):</label>
-            <input v-model.number="organizerScore" type="number" min="0" max="100" step="0.1" />
-          </div>
-          <button class="btn primary" @click="submitOrganizerScore">Submit Score</button>
+      <div v-if="currentCompetitorId && finalScore === null" class="voting-status-panel card-inner">
+        <div class="panel-header">
+          <h3>Judges Scoring & Override</h3>
+          <span class="instruction-text" v-if="isVotingOpen">
+            ⌨️ Type score + <strong>Enter ↵</strong>. Use <strong>Tab ↹</strong> for next.
+          </span>
         </div>
-      </div>
 
-      <div class="voting-status-panel">
-        <h3>Judges Status</h3>
         <div class="judges-grid">
-          <div v-for="i in judgeCount" :key="i" class="judge-indicator" :class="{ 'voted': receivedScores.includes(i) }">
-            Judge {{ i }}
+          <div v-for="i in judgeCount" :key="i"
+               class="judge-indicator"
+               :class="{ 'voted': receivedScores.includes(i) }">
+            <div class="judge-header">Judge {{ i }}</div>
+
+            <input
+              v-if="isVotingOpen"
+              type="number"
+              v-model.number="organizerScores[i]"
+              @keydown.enter="submitIndividualScore(i)"
+              :placeholder="receivedScores.includes(i) ? '✓' : '...'"
+              min="0" max="100" step="0.1"
+              class="judge-score-input"
+            />
           </div>
         </div>
       </div>
@@ -352,8 +351,7 @@ const forceResetLiveState = async () => {
   currentSkaterName.value = '';
   receivedScores.value = [];
   finalScore.value = null;
-  organizerScore.value = 50.0;
-  organizerJudgeId.value = 1;
+  organizerScores.value = {};
   saveState();
   await nextTick();
 };
@@ -372,19 +370,16 @@ const quitLiveMode = async () => {
 const closeCompetition = () => {
   if (confirm("Are you sure you want to close the current event and return to the main menu?")) {
 
-    // --- NOUVEAU : Envoi garanti du signal de reset (Bouton nucléaire) ---
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ action: "close_event" }));
     } else {
-      // Si la Tour de Contrôle n'était pas en LIVE, on ouvre une ligne directe d'urgence
       const serverIp = window.location.hostname || "127.0.0.1";
       const emergencySocket = new WebSocket(`ws://${serverIp}:8000/ws`);
       emergencySocket.onopen = () => {
         emergencySocket.send(JSON.stringify({ action: "close_event" }));
-        setTimeout(() => emergencySocket.close(), 1000); // On raccroche après 1 seconde
+        setTimeout(() => emergencySocket.close(), 1000);
       };
     }
-    // ---------------------------------------------------------------------
 
     isLive.value = false;
     isVotingOpen.value = false;
@@ -435,8 +430,7 @@ const currentRunNumber = ref(1);
 const receivedScores = ref([]);
 const finalScore = ref(null);
 
-const organizerJudgeId = ref(1);
-const organizerScore = ref(50.0);
+const organizerScores = ref({});
 
 let socket = null;
 
@@ -754,8 +748,6 @@ const startLiveEvent = async () => {
         saveState();
       } else if (payload.type === 'score_received') {
         if (!receivedScores.value.includes(payload.judge_id)) receivedScores.value.push(payload.judge_id);
-        const nextUnvoted = Array.from({length: judgeCount.value}, (_, i) => i + 1).find(id => !receivedScores.value.includes(id));
-        if (nextUnvoted) organizerJudgeId.value = nextUnvoted;
       } else if (payload.type === 'run_completed') {
         if (payload.is_cancelled) {
           await forceResetLiveState();
@@ -822,9 +814,21 @@ const triggerPodium = () => {
   socket.send(JSON.stringify({ action: "show_podium", leaderboard: liveLeaderboard.value }));
 };
 
-const submitOrganizerScore = () => {
+const submitIndividualScore = (judgeId) => {
   if (!socket || socket.readyState !== WebSocket.OPEN || !isLive.value) return;
-  socket.send(JSON.stringify({ action: 'submit_score', judge_id: organizerJudgeId.value, score: organizerScore.value }));
+
+  const scoreToSubmit = organizerScores.value[judgeId];
+
+  if (scoreToSubmit === undefined || scoreToSubmit === null || scoreToSubmit < 0 || scoreToSubmit > 100) {
+    alert(`Please enter a valid score (0-100) for Judge ${judgeId}.`);
+    return;
+  }
+
+  socket.send(JSON.stringify({
+    action: 'submit_score',
+    judge_id: judgeId,
+    score: scoreToSubmit
+  }));
 };
 
 watch(currentRunNumber, () => {
@@ -895,9 +899,6 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .skaters-list { list-style: none; padding: 0; max-height: 200px; overflow-y: auto; }
 .skaters-list li { padding: 10px; border-bottom: 1px solid #eee; }
 .input-row { display: flex; gap: 20px; align-items: flex-end; margin-top: 20px; }
-.judges-grid { display: flex; gap: 15px; margin-top: 10px; }
-.judge-indicator { flex: 1; text-align: center; padding: 15px; background-color: #e0e0e0; border-radius: 4px; font-weight: bold; transition: background-color 0.3s; }
-.judge-indicator.voted { background-color: #4caf50; color: white; }
 .result-panel { margin-top: 30px; text-align: center; padding: 20px; background-color: #fff3e0; border-radius: 8px; border: 2px solid #ff9800; }
 .score-display { font-size: 4rem; font-weight: bold; color: #e65100; }
 .active-call-info { background: #1976d2; color: white; padding: 15px; border-radius: 8px; margin-top: 20px; }
@@ -907,7 +908,25 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .inline-score-badge { background-color: #4caf50; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; }
 .inline-score-badge.dns-badge-small { background-color: #d32f2f; }
 
-.control-room.dark-theme { background-color: #121212; color: #e0e0e0; }
+/* New Judges Grid & Override Styling */
+.panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+.panel-header h3 { margin: 0; }
+.instruction-text { color: #1976d2; font-size: 0.9rem; font-style: italic; }
+
+.judges-grid { display: flex; gap: 15px; }
+.judge-indicator { flex: 1; display: flex; flex-direction: column; background-color: #e0e0e0; border-radius: 8px; overflow: hidden; transition: all 0.3s ease; border: 2px solid transparent; }
+.judge-header { padding: 10px; text-align: center; font-weight: bold; color: #555; background-color: rgba(0,0,0,0.05); }
+
+.judge-score-input { border: none; text-align: center; font-size: 2rem; font-weight: bold; padding: 15px 5px; width: 100%; border-radius: 0; background-color: #fff; color: #333; outline: none; transition: background-color 0.3s; }
+.judge-score-input:focus { background-color: #e3f2fd; }
+.judge-score-input::-webkit-outer-spin-button, .judge-score-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.judge-score-input[type=number] { -moz-appearance: textfield; }
+
+.judge-indicator.voted { background-color: #4caf50; border-color: #388e3c; }
+.judge-indicator.voted .judge-header { color: #fff; background-color: rgba(0,0,0,0.1); }
+.judge-indicator.voted .judge-score-input { background-color: #e8f5e9; color: #2e7d32; }
+
+/* Dark Theme Adjustments */
 .dark-theme .card { background: #1e1e1e; box-shadow: 0 2px 8px rgba(0,0,0,0.5); }
 .dark-theme .card-inner { background-color: #252525; border-color: #444; }
 .dark-theme .btn-theme { background-color: #333; color: #e0e0e0; }
@@ -924,8 +943,14 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .dark-theme .import-box, .dark-theme .manual-box { background: #2c2c2c; border-color: #444; }
 .dark-theme .skaters-list-container { background: #1e1e1e; border-color: #444; }
 .dark-theme .skaters-list li { border-bottom-color: #333; }
-.dark-theme .judge-indicator { background-color: #424242; color: #aaa; }
-.dark-theme .judge-indicator.voted { background-color: #388e3c; color: white; }
 .dark-theme .result-panel { background-color: #3e2723; border-color: #d84315; }
 .dark-theme .score-display { color: #ffb74d; }
+
+.dark-theme .panel-header { border-bottom-color: #444; }
+.dark-theme .judge-indicator { background-color: #424242; }
+.dark-theme .judge-header { color: #ccc; }
+.dark-theme .judge-score-input { background-color: #2c2c2c; color: #fff; }
+.dark-theme .judge-score-input:focus { background-color: #1a237e; }
+.dark-theme .judge-indicator.voted { background-color: #388e3c; border-color: #2e7d32; }
+.dark-theme .judge-indicator.voted .judge-score-input { background-color: #1b5e20; color: #a5d6a7; }
 </style>
