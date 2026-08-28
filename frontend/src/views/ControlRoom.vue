@@ -73,6 +73,15 @@
             </div>
             <div v-if="manualAddMessage" class="info-message">{{ manualAddMessage }}</div>
           </div>
+
+          <div class="logo-box">
+            <h3>Event Logo</h3>
+            <input type="file" accept="image/*" @change="uploadLogo" />
+            <div class="preview-container">
+               <img v-if="competitionLogoUrl" :src="competitionLogoUrl" class="preview-logo" />
+               <span v-else class="info-message">No logo selected</span>
+            </div>
+          </div>
         </div>
 
         <div class="skaters-list-container">
@@ -107,6 +116,11 @@
             <option value="Final">Final</option>
           </select>
         </div>
+
+        <div class="pdf-controls" v-if="pools.length > 0">
+          <button class="btn theme small" @click="downloadStartListPDF">🖨️ Print Start List</button>
+          <button class="btn theme small" @click="downloadRankingPDF">🏆 Print Ranking</button>
+        </div>
       </div>
 
       <div v-if="selectedCategoryId && selectedPhase" class="sandbox-workspace">
@@ -124,7 +138,6 @@
         <p class="drag-instruction">💡 Pro-tip: You can drag and drop skaters between pools!</p>
 
         <div class="pools-grid">
-          <!-- Unassigned Pool (Drag & Drop Target) -->
           <div class="pool-card unassigned-pool"
                @dragover.prevent
                @drop="onDrop($event, null)">
@@ -144,7 +157,6 @@
             </ul>
           </div>
 
-          <!-- Assigned Pools (Drag & Drop Target) -->
           <div v-for="pool in pools" :key="pool.id" class="pool-card"
                @dragover.prevent
                @drop="onDrop($event, pool.id)">
@@ -272,30 +284,29 @@
         </div>
       </div>
 
-      <div v-if="currentCompetitorId && isVotingOpen && finalScore === null" class="organizer-judge-panel card-inner">
-        <h3>Direct Judge Input (Organizer Backup)</h3>
-        <div class="input-row">
-          <div>
-            <label>Acting as:</label>
-            <select v-model.number="organizerJudgeId">
-              <option v-for="i in judgeCount" :key="i" :value="i">
-                Judge {{ i }}
-              </option>
-            </select>
-          </div>
-          <div>
-            <label>Score (0 - 100):</label>
-            <input v-model.number="organizerScore" type="number" min="0" max="100" step="0.1" />
-          </div>
-          <button class="btn primary" @click="submitOrganizerScore">Submit Score</button>
+      <div v-if="currentCompetitorId && finalScore === null" class="voting-status-panel card-inner">
+        <div class="panel-header">
+          <h3>Judges Scoring & Override</h3>
+          <span class="instruction-text" v-if="isVotingOpen">
+            ⌨️ Type score + <strong>Enter ↵</strong>. Use <strong>Tab ↹</strong> for next.
+          </span>
         </div>
-      </div>
 
-      <div class="voting-status-panel">
-        <h3>Judges Status</h3>
         <div class="judges-grid">
-          <div v-for="i in judgeCount" :key="i" class="judge-indicator" :class="{ 'voted': receivedScores.includes(i) }">
-            Judge {{ i }}
+          <div v-for="i in judgeCount" :key="i"
+               class="judge-indicator"
+               :class="{ 'voted': receivedScores.includes(i) }">
+            <div class="judge-header">Judge {{ i }}</div>
+
+            <input
+              v-if="isVotingOpen"
+              type="number"
+              v-model.number="organizerScores[i]"
+              @keydown.enter="submitIndividualScore(i)"
+              :placeholder="receivedScores.includes(i) ? '✓' : '...'"
+              min="0" max="100" step="0.1"
+              class="judge-score-input"
+            />
           </div>
         </div>
       </div>
@@ -310,10 +321,85 @@
 
       <hr style="margin: 30px 0;" />
 
-      <div class="podium-control-panel">
+      <!-- LEADERBOARD AVEC ÉDITION -->
+      <div class="leaderboard-panel card">
+        <h2>Live Leaderboard</h2>
+        <div class="table-responsive">
+          <table class="leaderboard-table">
+            <thead>
+              <tr>
+                <th class="col-rank">Rank</th>
+                <th class="col-skater">Skater</th>
+                <th class="col-run" v-for="i in maxRuns" :key="'th'+i">Run {{ i }}</th>
+                <th class="col-score">Best Score</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template v-for="(entry, index) in liveLeaderboard" :key="index">
+                <tr :class="{'dns-row': entry.score < 0}">
+                  <td class="col-rank">
+                    <span v-if="entry.score >= 0" class="rank-badge">{{ index + 1 }}</span>
+                    <span v-else class="rank-badge dns-badge">-</span>
+                  </td>
+                  <td class="col-skater">
+                    <div class="lb-skater-name">{{ entry.name }}</div>
+                    <div class="lb-meta">{{ entry.nationality }} - {{ entry.category }}</div>
+                  </td>
+
+                  <!-- NOUVEAU : Colonne de Run avec bouton d'édition discret -->
+                  <td class="col-run" v-for="i in maxRuns" :key="'td'+i">
+                    <div class="run-score-cell">
+                        <span v-if="entry.run_scores && entry.run_scores[i] !== undefined && entry.run_scores[i] >= 0">
+                          {{ entry.run_scores[i].toFixed(2) }}
+                          <button class="edit-icon-btn" @click="openEditModal(entry, i)" title="Quick Edit">✏️</button>
+                        </span>
+                        <span v-else-if="entry.run_scores && entry.run_scores[i] < 0" class="dns-text">
+                          DNS
+                          <button class="edit-icon-btn" @click="openEditModal(entry, i)" title="Quick Edit">✏️</button>
+                        </span>
+                        <span v-else class="run-empty">-</span>
+                    </div>
+                  </td>
+
+                  <td class="col-score highlight">
+                    <span v-if="entry.score < 0" class="dns-text">DNS</span>
+                    <span v-else>{{ entry.score.toFixed(2) }}</span>
+                  </td>
+                </tr>
+              </template>
+              <tr v-if="liveLeaderboard.length === 0">
+                <td :colspan="3 + maxRuns" class="empty-state">No scores recorded yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="podium-control-panel" style="margin-top: 20px;">
         <button class="btn success large wide" @click="triggerPodium">🏆 SHOW PODIUM (END CONTEST)</button>
       </div>
     </section>
+
+    <!-- FENÊTRE MODALE DE QUICK EDIT -->
+    <div class="modal-overlay" v-if="isEditModalOpen" @click.self="isEditModalOpen = false">
+      <div class="modal-content">
+        <h3 class="modal-title">Edit Scores</h3>
+        <p class="modal-subtitle">{{ editSkaterName }} - Run {{ editRunNumber }}</p>
+
+        <div class="edit-judges-list">
+          <div class="form-group edit-judge-row" v-for="j in judgeCount" :key="'edit'+j">
+            <label>Judge {{ j }}:</label>
+            <input type="number" v-model.number="editScores[j]" min="0" max="100" step="0.1" />
+          </div>
+        </div>
+
+        <div class="modal-actions" style="margin-top: 20px; display: flex; gap: 10px; justify-content: flex-end;">
+          <button class="btn" @click="isEditModalOpen = false">Cancel</button>
+          <button class="btn success" @click="saveEditedScores">Save & Broadcast</button>
+        </div>
+      </div>
+    </div>
+
   </div>
 </template>
 
@@ -325,12 +411,14 @@ const isDarkMode = ref(localStorage.getItem('control_room_theme') === 'dark');
 const toggleTheme = () => {
   isDarkMode.value = !isDarkMode.value;
   localStorage.setItem('control_room_theme', isDarkMode.value ? 'dark' : 'light');
+  document.body.style.backgroundColor = isDarkMode.value ? '#121212' : '#f5f5f5';
 };
 
 const isLive = ref(localStorage.getItem('is_live') === 'true');
 const isVotingOpen = ref(localStorage.getItem('is_voting_open') === 'true');
 const competitionId = ref(parseInt(localStorage.getItem('comp_id')) || null);
 const competitionName = ref(localStorage.getItem('comp_name') || '');
+const competitionLogoUrl = ref(localStorage.getItem('comp_logo') || null);
 const judgeCount = ref(parseInt(localStorage.getItem('judge_count')) || 3);
 const maxRuns = ref(parseInt(localStorage.getItem('max_runs')) || 3);
 const registeredSkaters = ref(JSON.parse(localStorage.getItem('skaters') || '[]'));
@@ -352,8 +440,7 @@ const forceResetLiveState = async () => {
   currentSkaterName.value = '';
   receivedScores.value = [];
   finalScore.value = null;
-  organizerScore.value = 50.0;
-  organizerJudgeId.value = 1;
+  organizerScores.value = {};
   saveState();
   await nextTick();
 };
@@ -371,20 +458,16 @@ const quitLiveMode = async () => {
 
 const closeCompetition = () => {
   if (confirm("Are you sure you want to close the current event and return to the main menu?")) {
-
-    // --- NOUVEAU : Envoi garanti du signal de reset (Bouton nucléaire) ---
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ action: "close_event" }));
     } else {
-      // Si la Tour de Contrôle n'était pas en LIVE, on ouvre une ligne directe d'urgence
       const serverIp = window.location.hostname || "127.0.0.1";
       const emergencySocket = new WebSocket(`ws://${serverIp}:8000/ws`);
       emergencySocket.onopen = () => {
         emergencySocket.send(JSON.stringify({ action: "close_event" }));
-        setTimeout(() => emergencySocket.close(), 1000); // On raccroche après 1 seconde
+        setTimeout(() => emergencySocket.close(), 1000);
       };
     }
-    // ---------------------------------------------------------------------
 
     isLive.value = false;
     isVotingOpen.value = false;
@@ -392,6 +475,7 @@ const closeCompetition = () => {
 
     competitionId.value = null;
     competitionName.value = '';
+    competitionLogoUrl.value = null;
     registeredSkaters.value = [];
     categories.value = [];
     pools.value = [];
@@ -400,6 +484,7 @@ const closeCompetition = () => {
 
     localStorage.removeItem('comp_id');
     localStorage.removeItem('comp_name');
+    localStorage.removeItem('comp_logo');
     localStorage.removeItem('skaters');
     localStorage.removeItem('leaderboard');
     localStorage.removeItem('is_live');
@@ -435,10 +520,16 @@ const currentRunNumber = ref(1);
 const receivedScores = ref([]);
 const finalScore = ref(null);
 
-const organizerJudgeId = ref(1);
-const organizerScore = ref(50.0);
+const organizerScores = ref({});
 
 let socket = null;
+
+// NOUVELLES VARIABLES POUR LE QUICK EDIT
+const isEditModalOpen = ref(false);
+const editSkaterName = ref('');
+const editCompetitorId = ref(null);
+const editRunNumber = ref(null);
+const editScores = ref({});
 
 const unassignedSkaters = computed(() => {
   if (!selectedCategoryId.value) return [];
@@ -447,7 +538,6 @@ const unassignedSkaters = computed(() => {
   return categorySkaters.filter(s => !assignedIds.includes(s.id));
 });
 
-/* --- DRAG AND DROP LOGIC --- */
 const onDragStart = (event, skaterId) => {
   event.dataTransfer.setData('skaterId', skaterId);
   event.target.style.opacity = '0.5';
@@ -464,7 +554,6 @@ const onDrop = async (event, targetPoolId) => {
     await assignSkater(skaterId, targetPoolId);
   }
 };
-/* --------------------------- */
 
 const autoGenerateQualifs = async () => {
   if (!competitionId.value || !selectedCategoryId.value) return;
@@ -505,6 +594,8 @@ const refreshLiveLeaderboard = async () => {
 };
 
 onMounted(async () => {
+  document.body.style.backgroundColor = isDarkMode.value ? '#121212' : '#f5f5f5';
+
   if (isLive.value && (isVotingOpen.value || currentCompetitorId.value)) {
     console.warn("Recovering from stuck state on mount...");
     await forceResetLiveState();
@@ -530,6 +621,40 @@ onMounted(async () => {
   });
 });
 
+const fetchLogo = async () => {
+  if (!competitionId.value) return;
+  try {
+    const response = await fetch(`/competitions/${competitionId.value}/logo/`);
+    if (response.ok) {
+      const data = await response.json();
+      if (data.logo_url) {
+        competitionLogoUrl.value = data.logo_url + '?t=' + new Date().getTime();
+        localStorage.setItem('comp_logo', competitionLogoUrl.value);
+      } else {
+        competitionLogoUrl.value = null;
+        localStorage.removeItem('comp_logo');
+      }
+    }
+  } catch (error) { console.error(error); }
+};
+
+const uploadLogo = async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const response = await fetch(`/competitions/${competitionId.value}/logo/`, {
+      method: 'POST', body: formData
+    });
+    if (response.ok) {
+      const data = await response.json();
+      competitionLogoUrl.value = data.logo_url + '?t=' + new Date().getTime();
+      localStorage.setItem('comp_logo', competitionLogoUrl.value);
+    }
+  } catch (error) { console.error(error); }
+};
+
 const loadCompetition = async () => {
   if (!selectedCompetitionId.value) return;
   const comp = existingCompetitions.value.find(c => c.id === selectedCompetitionId.value);
@@ -539,6 +664,7 @@ const loadCompetition = async () => {
     pools.value = [];
     liveLeaderboard.value = [];
     saveState();
+    await fetchLogo();
     await fetchRegisteredSkaters();
     await fetchCategories();
   }
@@ -558,6 +684,7 @@ const createCompetition = async () => {
       pools.value = [];
       liveLeaderboard.value = [];
       saveState();
+      await fetchLogo();
       await fetchRegisteredSkaters();
       await fetchCategories();
     }
@@ -673,6 +800,16 @@ const downloadResults = () => {
   window.location.href = `/competitions/${competitionId.value}/export-results/`;
 };
 
+const downloadStartListPDF = () => {
+  if (!competitionId.value || !selectedCategoryId.value || !selectedPhase.value) return;
+  window.open(`/competitions/${competitionId.value}/categories/${selectedCategoryId.value}/export-startlist-pdf/?phase=${selectedPhase.value}`, '_blank');
+};
+
+const downloadRankingPDF = () => {
+  if (!competitionId.value || !selectedCategoryId.value || !selectedPhase.value) return;
+  window.open(`/competitions/${competitionId.value}/categories/${selectedCategoryId.value}/export-ranking-pdf/?phase=${selectedPhase.value}`, '_blank');
+};
+
 const fetchRegisteredSkaters = async () => {
   if (!competitionId.value) return;
   try {
@@ -725,6 +862,7 @@ const addSkaterManually = async () => {
 
 const startLiveEvent = async () => {
   await forceResetLiveState();
+  currentRunNumber.value = 1;
   isLive.value = true;
   saveState();
   const serverIp = window.location.hostname || "127.0.0.1";
@@ -735,7 +873,8 @@ const startLiveEvent = async () => {
       action: "start_live",
       judge_count: judgeCount.value,
       max_runs: maxRuns.value,
-      competition_name: competitionName.value
+      competition_name: competitionName.value,
+      logo_url: competitionLogoUrl.value
     }));
     refreshLiveLeaderboard();
   };
@@ -743,7 +882,10 @@ const startLiveEvent = async () => {
   socket.onmessage = async (event) => {
     try {
       const payload = JSON.parse(event.data);
-      if (payload.type === 'new_run') {
+      if (payload.type === 'leaderboard_updated') {
+        liveLeaderboard.value = payload.leaderboard;
+      }
+      else if (payload.type === 'new_run') {
         if (payload.previous_scores) {
           receivedScores.value = Object.keys(payload.previous_scores).map(Number);
         } else {
@@ -754,8 +896,6 @@ const startLiveEvent = async () => {
         saveState();
       } else if (payload.type === 'score_received') {
         if (!receivedScores.value.includes(payload.judge_id)) receivedScores.value.push(payload.judge_id);
-        const nextUnvoted = Array.from({length: judgeCount.value}, (_, i) => i + 1).find(id => !receivedScores.value.includes(id));
-        if (nextUnvoted) organizerJudgeId.value = nextUnvoted;
       } else if (payload.type === 'run_completed') {
         if (payload.is_cancelled) {
           await forceResetLiveState();
@@ -817,14 +957,97 @@ const markDNS = () => {
   }
 };
 
-const triggerPodium = () => {
+const triggerPodium = async () => {
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify({ action: "show_podium", leaderboard: liveLeaderboard.value }));
+  if (!competitionId.value || !selectedCategoryId.value) return;
+
+  try {
+    const response = await fetch(`/competitions/${competitionId.value}/categories/${selectedCategoryId.value}/global-ranking/`);
+    if (response.ok) {
+      const globalRanking = await response.json();
+      const catName = categories.value.find(c => c.id === selectedCategoryId.value)?.name || '';
+
+      const formattedRanking = globalRanking.map(r => ({
+        id: r.competitor_id,
+        name: `${r.first_name} ${r.last_name}`,
+        score: r.best_score,
+        run_scores: r.run_scores,
+        nationality: r.nationality,
+        category: catName,
+        highest_phase: r.highest_phase
+      }));
+
+      socket.send(JSON.stringify({
+        action: "show_podium",
+        leaderboard: formattedRanking,
+        category: catName
+      }));
+    }
+  } catch (error) { console.error("Error fetching global ranking:", error); }
 };
 
-const submitOrganizerScore = () => {
+const submitIndividualScore = (judgeId) => {
   if (!socket || socket.readyState !== WebSocket.OPEN || !isLive.value) return;
-  socket.send(JSON.stringify({ action: 'submit_score', judge_id: organizerJudgeId.value, score: organizerScore.value }));
+
+  const scoreToSubmit = organizerScores.value[judgeId];
+
+  if (scoreToSubmit === undefined || scoreToSubmit === null || scoreToSubmit < 0 || scoreToSubmit > 100) {
+    alert(`Please enter a valid score (0-100) for Judge ${judgeId}.`);
+    return;
+  }
+
+  socket.send(JSON.stringify({
+    action: 'submit_score',
+    judge_id: judgeId,
+    score: scoreToSubmit
+  }));
+};
+
+// NOUVELLES FONCTIONS POUR LE QUICK EDIT
+const openEditModal = async (skaterEntry, runNum) => {
+  editSkaterName.value = skaterEntry.name;
+  editCompetitorId.value = skaterEntry.id;
+  editRunNumber.value = runNum;
+  editScores.value = {};
+
+  // Initialisation à blanc
+  for(let i=1; i<=judgeCount.value; i++) {
+      editScores.value[i] = 0.0;
+  }
+
+  try {
+      const res = await fetch(`/competitions/${competitionId.value}/competitors/${skaterEntry.id}/scores/?phase=${selectedPhase.value}&run_number=${runNum}`);
+      if (res.ok) {
+          const data = await res.json();
+          for (const [jId, val] of Object.entries(data)) {
+              editScores.value[jId] = val;
+          }
+      }
+  } catch(e) { console.error(e) }
+
+  isEditModalOpen.value = true;
+};
+
+const saveEditedScores = async () => {
+  try {
+      const res = await fetch('/edit-score/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+              competition_id: competitionId.value,
+              category_id: selectedCategoryId.value,
+              competitor_id: editCompetitorId.value,
+              phase: selectedPhase.value,
+              run_number: editRunNumber.value,
+              scores: editScores.value
+          })
+      });
+      if (res.ok) {
+          isEditModalOpen.value = false;
+          await fetchPools();
+          await refreshLiveLeaderboard();
+      }
+  } catch(e) { console.error(e); }
 };
 
 watch(currentRunNumber, () => {
@@ -845,6 +1068,7 @@ onUnmounted(() => {
 
 <style scoped>
 .control-room { font-family: Arial, sans-serif; max-width: 1000px; margin: 0 auto; padding: 20px; background-color: #f5f5f5; color: #333; min-height: 100vh; transition: all 0.3s ease; }
+.control-room.dark-theme { background-color: #121212; color: #e0e0e0; }
 .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .header-controls { display: flex; align-items: center; gap: 15px; }
 .btn-theme { background-color: #e0e0e0; border: none; padding: 8px 15px; border-radius: 20px; cursor: pointer; font-weight: bold; transition: background-color 0.3s; }
@@ -855,14 +1079,17 @@ onUnmounted(() => {
 .card-inner { background-color: #f9f9f9; border: 1px solid #ddd; padding: 15px; border-radius: 6px; margin-bottom: 20px; }
 
 .live-start-options { display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap; }
-.sandbox-filters, .live-context-bar { display: flex; gap: 20px; background: #e3f2fd; padding: 15px; border-radius: 8px; margin-bottom: 20px; align-items: flex-end; flex-wrap: wrap; }
+.sandbox-filters, .live-context-bar { display: flex; gap: 20px; background: #e3f2fd; padding: 15px; border-radius: 8px; margin-bottom: 20px; align-items: flex-end; flex-wrap: wrap; position: relative; }
+.pdf-controls { display: flex; gap: 10px; margin-left: auto; }
+.btn.theme { background-color: #424242; color: white; border: 1px solid #666; }
+.btn.theme:hover { background-color: #555; }
+
 .pool-controls { display: flex; gap: 10px; margin-bottom: 20px; }
 .pools-grid, .live-pools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
 .pool-card { background: #fff; border: 1px solid #ccc; border-radius: 6px; padding: 15px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); transition: background-color 0.3s ease; }
 .unassigned-pool { border: 2px dashed #ff9800; background: #fff3e0; }
 .pool-card h3 { margin-top: 0; padding-bottom: 10px; border-bottom: 1px solid #eee; font-size: 1.1rem; }
 
-/* Drag and Drop styling */
 .drag-instruction { font-style: italic; color: #1976d2; margin-bottom: 10px; font-size: 0.9rem; }
 .draggable-item { cursor: grab; padding: 8px; border: 1px solid transparent; transition: all 0.2s ease; border-radius: 4px; }
 .draggable-item:hover { background-color: #f0f0f0; border: 1px dashed #bbb; }
@@ -888,16 +1115,18 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .btn:disabled { background-color: #ccc; cursor: not-allowed; }
 .success-message { color: #2e7d32; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; }
 .info-message { color: #1976d2; font-style: italic; margin-top: 10px; }
-.split-panel { display: flex; gap: 20px; margin-top: 20px; }
-.import-box, .manual-box { flex: 1; background: #f9f9f9; padding: 15px; border-radius: 8px; border: 1px solid #ddd; }
+
+.split-panel { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 20px; }
+@media (max-width: 850px) { .split-panel { grid-template-columns: 1fr; } }
+.import-box, .manual-box, .logo-box { background: #f9f9f9; padding: 15px; border-radius: 8px; border: 1px solid #ddd; display: flex; flex-direction: column; overflow: hidden; }
 .input-row-small { display: flex; flex-direction: column; gap: 10px; }
-.skaters-list-container { margin-top: 20px; background: #fff; border: 1px solid #eee; padding: 15px; border-radius: 8px; }
+.preview-container { margin-top: auto; height: 120px; width: 100%; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.05); border-radius: 6px; padding: 10px; box-sizing: border-box; }
+.preview-logo { max-width: 100%; max-height: 100%; object-fit: contain; }
+
+.skaters-list-container { margin-top: 20px; background: #fff; border: 1px solid #eee; padding: 15px; border-radius: 8px; clear: both; }
 .skaters-list { list-style: none; padding: 0; max-height: 200px; overflow-y: auto; }
 .skaters-list li { padding: 10px; border-bottom: 1px solid #eee; }
 .input-row { display: flex; gap: 20px; align-items: flex-end; margin-top: 20px; }
-.judges-grid { display: flex; gap: 15px; margin-top: 10px; }
-.judge-indicator { flex: 1; text-align: center; padding: 15px; background-color: #e0e0e0; border-radius: 4px; font-weight: bold; transition: background-color 0.3s; }
-.judge-indicator.voted { background-color: #4caf50; color: white; }
 .result-panel { margin-top: 30px; text-align: center; padding: 20px; background-color: #fff3e0; border-radius: 8px; border: 2px solid #ff9800; }
 .score-display { font-size: 4rem; font-weight: bold; color: #e65100; }
 .active-call-info { background: #1976d2; color: white; padding: 15px; border-radius: 8px; margin-top: 20px; }
@@ -907,7 +1136,40 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .inline-score-badge { background-color: #4caf50; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; }
 .inline-score-badge.dns-badge-small { background-color: #d32f2f; }
 
-.control-room.dark-theme { background-color: #121212; color: #e0e0e0; }
+.panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+.panel-header h3 { margin: 0; }
+.instruction-text { color: #1976d2; font-size: 0.9rem; font-style: italic; }
+
+.judges-grid { display: flex; gap: 15px; }
+.judge-indicator { flex: 1; display: flex; flex-direction: column; background-color: #e0e0e0; border-radius: 8px; overflow: hidden; transition: all 0.3s ease; border: 2px solid transparent; }
+.judge-header { padding: 10px; text-align: center; font-weight: bold; color: #555; background-color: rgba(0,0,0,0.05); }
+
+.judge-score-input { border: none; text-align: center; font-size: 2rem; font-weight: bold; padding: 15px 5px; width: 100%; border-radius: 0; background-color: #fff; color: #333; outline: none; transition: background-color 0.3s; }
+.judge-score-input:focus { background-color: #e3f2fd; }
+.judge-score-input::-webkit-outer-spin-button, .judge-score-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.judge-score-input[type=number] { -moz-appearance: textfield; }
+
+.judge-indicator.voted { background-color: #4caf50; border-color: #388e3c; }
+.judge-indicator.voted .judge-header { color: #fff; background-color: rgba(0,0,0,0.1); }
+.judge-indicator.voted .judge-score-input { background-color: #e8f5e9; color: #2e7d32; }
+
+.leaderboard-table { width: 100%; min-width: 400px; border-collapse: collapse; margin-top: 15px; }
+.leaderboard-table th, .leaderboard-table td { padding: 15px; text-align: left; border-bottom: 1px solid #ccc; }
+.leaderboard-table th { color: #555; text-transform: uppercase; font-size: 0.9rem; }
+
+/* QUICK EDIT STYLES */
+.run-score-cell { display: flex; align-items: center; gap: 8px; }
+.edit-icon-btn { background: none; border: none; cursor: pointer; opacity: 0.3; transition: opacity 0.2s; font-size: 0.9rem; padding: 0; }
+.edit-icon-btn:hover { opacity: 1; }
+
+.modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.modal-content { background: #fff; padding: 30px; border-radius: 8px; width: 400px; max-width: 90vw; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+.modal-title { margin-top: 0; color: #1976d2; margin-bottom: 5px; }
+.modal-subtitle { color: #666; font-style: italic; margin-bottom: 20px; }
+.edit-judge-row { flex-direction: row !important; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 10px; }
+.edit-judge-row input { width: 100px; text-align: center; font-size: 1.2rem; font-weight: bold; }
+
+/* Dark Theme Adjustments */
 .dark-theme .card { background: #1e1e1e; box-shadow: 0 2px 8px rgba(0,0,0,0.5); }
 .dark-theme .card-inner { background-color: #252525; border-color: #444; }
 .dark-theme .btn-theme { background-color: #333; color: #e0e0e0; }
@@ -917,15 +1179,33 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .dark-theme .sandbox-filters, .dark-theme .live-context-bar { background: #1a237e; }
 .dark-theme .pool-card { background: #2c2c2c; border-color: #444; }
 .dark-theme .unassigned-pool { border-color: #f57c00; background: #3e2723; }
-.dark-theme .skater-assign-list li { border-bottom-color: #444; }
 .dark-theme .draggable-item:hover { background-color: #3a3a3a; border-color: #666; }
 .dark-theme .auto-generate-box { background: #1b5e20; border-color: #2e7d32; }
 .dark-theme .active-skater { background-color: #4a401a; border-left-color: #ffd600; }
-.dark-theme .import-box, .dark-theme .manual-box { background: #2c2c2c; border-color: #444; }
+.dark-theme .import-box, .dark-theme .manual-box, .dark-theme .logo-box { background: #2c2c2c; border-color: #444; }
+.dark-theme .preview-container { background: rgba(0,0,0,0.2); }
 .dark-theme .skaters-list-container { background: #1e1e1e; border-color: #444; }
-.dark-theme .skaters-list li { border-bottom-color: #333; }
-.dark-theme .judge-indicator { background-color: #424242; color: #aaa; }
-.dark-theme .judge-indicator.voted { background-color: #388e3c; color: white; }
+.dark-theme .skater-assign-list li { border-bottom-color: #444; color: #e0e0e0; }
+.dark-theme .skaters-list li { border-bottom-color: #333; color: #e0e0e0; }
+.dark-theme .empty-list { color: #aaa; }
+.dark-theme .drag-instruction { color: #64b5f6; }
 .dark-theme .result-panel { background-color: #3e2723; border-color: #d84315; }
 .dark-theme .score-display { color: #ffb74d; }
+
+.dark-theme .panel-header { border-bottom-color: #444; }
+.dark-theme .judge-indicator { background-color: #424242; }
+.dark-theme .judge-header { color: #ccc; }
+.dark-theme .judge-score-input { background-color: #2c2c2c; color: #fff; }
+.dark-theme .judge-score-input:focus { background-color: #1a237e; }
+.dark-theme .judge-indicator.voted { background-color: #388e3c; border-color: #2e7d32; }
+.dark-theme .judge-indicator.voted .judge-score-input { background-color: #1b5e20; color: #a5d6a7; }
+
+.dark-theme label, .dark-theme p { color: #e0e0e0; }
+.dark-theme .success-message { color: #81c784; }
+.dark-theme .info-message { color: #64b5f6; }
+.dark-theme .instruction-text { color: #90caf9; }
+.dark-theme .leaderboard-table th { color: #aaa; }
+.dark-theme .leaderboard-table td { border-bottom-color: #333; }
+.dark-theme .modal-content { background: #1e1e1e; border: 1px solid #444; }
+.dark-theme .edit-judge-row { border-bottom-color: #333; }
 </style>

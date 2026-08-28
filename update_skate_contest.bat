@@ -12,7 +12,7 @@ python --version >nul 2>&1
 if %errorlevel% neq 0 (
     color 0C
     echo [ERREUR] Python n'est pas installe ou n'est pas dans le PATH de cette machine.
-    echo Veuillez installer Python (3.9 ou superieur) pour executer la mise a jour.
+    echo Veuillez installer Python ^(3.9 ou superieur^) pour executer la mise a jour.
     echo.
     pause
     exit /b 1

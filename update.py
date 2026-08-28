@@ -93,7 +93,7 @@ def main() -> None:
 
     # Step 4: Install/Update Python Backend dependencies
     if os.path.exists("backend"):
-        run_command("python -m pip install fastapi uvicorn pydantic openpyxl python-multipart websockets",
+        run_command("python -m pip install fastapi uvicorn pydantic openpyxl python-multipart websockets fpdf2",
                     cwd="backend")
     else:
         print("Backend directory not found. Skipping pip install.")

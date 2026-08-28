@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import sqlite3
+import glob
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional, Any, Iterator
 
@@ -32,8 +33,13 @@ from competition_manager import (
     get_phase_ranking,
     generate_next_phase,
     export_phase_results_to_excel,
+    get_global_ranking,
+    export_ranking_pdf,
+    export_startlist_pdf,
     CompetitorRegistration,
-    PoolCreateData
+    PoolCreateData,
+    get_individual_scores,
+    update_run_scores
 )
 
 import mimetypes
@@ -43,6 +49,10 @@ mimetypes.add_type("text/css", ".css")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+UPLOAD_DIR = "uploads"
+LOGOS_DIR = os.path.join(UPLOAD_DIR, "logos")
+os.makedirs(LOGOS_DIR, exist_ok=True)
 
 
 @asynccontextmanager
@@ -54,6 +64,8 @@ async def lifespan(fastapi_app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+app.mount("/logos", StaticFiles(directory=LOGOS_DIR), name="logos")
 
 
 def get_db_connection() -> Iterator[sqlite3.Connection]:
@@ -99,6 +111,15 @@ class GeneratePhaseRequest(BaseModel):
     next_phase: str
     top_n: int
     pools_count: int
+
+
+class EditScoreRequest(BaseModel):
+    competition_id: int
+    category_id: int
+    competitor_id: int
+    phase: str
+    run_number: int
+    scores: Dict[int, float]
 
 
 @app.post("/competitions/")
@@ -197,6 +218,36 @@ def upload_competitors_excel(
     finally:
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
+
+
+@app.post("/competitions/{competition_id}/logo/")
+def upload_logo(
+        competition_id: int,
+        file: UploadFile = File(...)
+) -> Dict[str, str]:
+    for existing in glob.glob(os.path.join(LOGOS_DIR, f"comp_{competition_id}_logo.*")):
+        try:
+            os.remove(existing)
+        except OSError:
+            pass
+
+    ext = file.filename.split('.')[-1]
+    filename = f"comp_{competition_id}_logo.{ext}"
+    filepath = os.path.join(LOGOS_DIR, filename)
+
+    with open(filepath, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    return {"logo_url": f"/logos/{filename}"}
+
+
+@app.get("/competitions/{competition_id}/logo/")
+def get_logo(competition_id: int) -> Dict[str, Optional[str]]:
+    files = glob.glob(os.path.join(LOGOS_DIR, f"comp_{competition_id}_logo.*"))
+    if files:
+        filename = os.path.basename(files[0])
+        return {"logo_url": f"/logos/{filename}"}
+    return {"logo_url": None}
 
 
 @app.get("/competitions/{competition_id}/competitors/")
@@ -328,6 +379,19 @@ def get_rankings(
         raise HTTPException(status_code=500, detail="Database error")
 
 
+@app.get("/competitions/{competition_id}/categories/{category_id}/global-ranking/")
+def get_global_rankings(
+        competition_id: int,
+        category_id: int,
+        db_conn: sqlite3.Connection = Depends(get_db_connection)
+) -> List[Dict[str, Any]]:
+    try:
+        return get_global_ranking(db_conn, competition_id, category_id)
+    except Exception as error:
+        logger.error(f"Error fetching global rankings: {error}")
+        raise HTTPException(status_code=500, detail="Database error")
+
+
 @app.post("/competitions/{competition_id}/categories/{category_id}/generate-phase/")
 def generate_phase(
         competition_id: int,
@@ -368,6 +432,83 @@ def export_results(
     except Exception as error:
         logger.error(f"Error exporting results: {error}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# Génération du PDF des Classements (A4)
+@app.get("/competitions/{competition_id}/categories/{category_id}/export-ranking-pdf/")
+def export_ranking_pdf_endpoint(
+        competition_id: int,
+        category_id: int,
+        phase: str,
+        db_conn: sqlite3.Connection = Depends(get_db_connection)
+) -> FileResponse:
+    try:
+        file_path = f"ranking_{competition_id}_{category_id}_{phase}.pdf"
+        export_ranking_pdf(db_conn, competition_id, category_id, phase, file_path, LOGOS_DIR)
+        return FileResponse(
+            path=file_path,
+            filename=f"Ranking_{phase}.pdf",
+            media_type="application/pdf"
+        )
+    except Exception as error:
+        logger.error(f"Error exporting PDF: {error}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# Génération du PDF des Ordres de Passage (A4)
+@app.get("/competitions/{competition_id}/categories/{category_id}/export-startlist-pdf/")
+def export_startlist_pdf_endpoint(
+        competition_id: int,
+        category_id: int,
+        phase: str,
+        db_conn: sqlite3.Connection = Depends(get_db_connection)
+) -> FileResponse:
+    try:
+        file_path = f"startlist_{competition_id}_{category_id}_{phase}.pdf"
+        export_startlist_pdf(db_conn, competition_id, category_id, phase, file_path, LOGOS_DIR)
+        return FileResponse(
+            path=file_path,
+            filename=f"StartList_{phase}.pdf",
+            media_type="application/pdf"
+        )
+    except Exception as error:
+        logger.error(f"Error exporting PDF: {error}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@app.get("/competitions/{competition_id}/competitors/{competitor_id}/scores/")
+def api_get_scores(competitor_id: int, phase: str, run_number: int,
+                   db_conn: sqlite3.Connection = Depends(get_db_connection)):
+    return get_individual_scores(db_conn, competitor_id, phase, run_number)
+
+
+@app.post("/edit-score/")
+async def api_edit_score(req: EditScoreRequest):
+    # Ouvrir la connexion manuellement dans le thread de l'event loop
+    db_conn = get_connection()
+    try:
+        update_run_scores(db_conn, req.competitor_id, req.phase, req.run_number, req.scores)
+
+        # Forcer la MAJ de l'écran public silencieusement
+        ranking = get_phase_ranking(db_conn, req.competition_id, req.category_id, req.phase)
+        cursor = db_conn.cursor()
+        cursor.execute("SELECT name FROM category WHERE id=?", (req.category_id,))
+        cat_row = cursor.fetchone()
+        cat_name = cat_row[0] if cat_row else ""
+
+        formatted_ranking = [{
+            "id": r["competitor_id"],
+            "name": f"{r['first_name']} {r['last_name']}",
+            "score": r["best_score"],
+            "run_scores": r["run_scores"],
+            "nationality": r["nationality"],
+            "category": cat_name
+        } for r in ranking]
+
+        await global_manager.broadcast_json({"type": "leaderboard_updated", "leaderboard": formatted_ranking})
+        return {"status": "success"}
+    finally:
+        db_conn.close()
 
 
 class ConnectionManager:
@@ -430,7 +571,8 @@ async def websocket_endpoint(websocket: WebSocket):
         "type": "board_meta",
         "competition_name": getattr(global_manager, "competition_name", "SKATE CONTEST"),
         "judge_count": getattr(global_manager, "judge_count", 5),
-        "max_runs": getattr(global_manager, "max_runs", 3)
+        "max_runs": getattr(global_manager, "max_runs", 3),
+        "logo_url": getattr(global_manager, "logo_url", None)
     })
 
     try:
@@ -442,11 +584,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 global_manager.judge_count = data.get("judge_count", 3)
                 global_manager.max_runs = data.get("max_runs", 3)
                 global_manager.competition_name = data.get("competition_name", "SKATE CONTEST")
+                global_manager.logo_url = data.get("logo_url")
                 await global_manager.broadcast_json({
                     "type": "board_meta",
                     "competition_name": global_manager.competition_name,
                     "judge_count": global_manager.judge_count,
-                    "max_runs": global_manager.max_runs
+                    "max_runs": global_manager.max_runs,
+                    "logo_url": global_manager.logo_url
                 })
 
             elif action == "update_meta":
@@ -456,7 +600,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     "type": "board_meta",
                     "competition_name": getattr(global_manager, "competition_name", "SKATE CONTEST"),
                     "judge_count": getattr(global_manager, "judge_count", 3),
-                    "max_runs": getattr(global_manager, "max_runs", 3)
+                    "max_runs": getattr(global_manager, "max_runs", 3),
+                    "logo_url": getattr(global_manager, "logo_url", None)
                 })
 
             elif action == "call_skater":
@@ -503,11 +648,13 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 db_conn = get_connection()
                 cursor = db_conn.cursor()
-                cursor.execute(
-                    "INSERT OR REPLACE INTO run (competitor_id, phase, run_number, final_score) VALUES (?, ?, ?, ?)",
-                    (global_manager.cached_run.get("competitor_id"), global_manager.cached_run.get("phase"),
-                     global_manager.cached_run.get("run_number"), -1.0)
-                )
+                cursor.execute("""
+                                    INSERT INTO run (competitor_id, phase, run_number, final_score) 
+                                    VALUES (?, ?, ?, ?)
+                                    ON CONFLICT(competitor_id, phase, run_number) DO UPDATE SET final_score=excluded.final_score
+                                """, (
+                global_manager.cached_run.get("competitor_id"), global_manager.cached_run.get("phase"),
+                global_manager.cached_run.get("run_number"), -1.0))
                 db_conn.commit()
                 db_conn.close()
 
@@ -520,7 +667,8 @@ async def websocket_endpoint(websocket: WebSocket):
             elif action == "show_podium":
                 await global_manager.broadcast_json({
                     "type": "podium_mode",
-                    "leaderboard": data.get("leaderboard", [])
+                    "leaderboard": data.get("leaderboard", []),
+                    "category": data.get("category", "")
                 })
 
             elif action == "submit_score":
@@ -545,11 +693,28 @@ async def websocket_endpoint(websocket: WebSocket):
 
                     db_conn = get_connection()
                     cursor = db_conn.cursor()
-                    cursor.execute(
-                        "INSERT OR REPLACE INTO run (competitor_id, phase, run_number, final_score) VALUES (?, ?, ?, ?)",
-                        (global_manager.cached_run.get("competitor_id"), global_manager.cached_run.get("phase"),
-                         global_manager.cached_run.get("run_number"), final_score)
-                    )
+                    comp_id = global_manager.cached_run.get("competitor_id")
+                    phase = global_manager.cached_run.get("phase")
+                    run_num = global_manager.cached_run.get("run_number")
+
+                    # 1. Sauvegarde du run
+                    cursor.execute("""
+                                            INSERT INTO run (competitor_id, phase, run_number, final_score) 
+                                            VALUES (?, ?, ?, ?)
+                                            ON CONFLICT(competitor_id, phase, run_number) DO UPDATE SET final_score=excluded.final_score
+                                        """, (comp_id, phase, run_num, final_score))
+
+                    cursor.execute("SELECT id FROM run WHERE competitor_id=? AND phase=? AND run_number=?",
+                                   (comp_id, phase, run_num))
+                    run_id = cursor.fetchone()[0]
+
+                    # 2. SAUVEGARDE DES NOTES INDIVIDUELLES
+                    for j_id, s_val in global_manager.received_scores.items():
+                        cursor.execute("""
+                                                INSERT INTO score (run_id, judge_id, score_value)
+                                                VALUES (?, ?, ?)
+                                                ON CONFLICT(run_id, judge_id) DO UPDATE SET score_value=excluded.score_value
+                                            """, (run_id, int(j_id), float(s_val)))
                     db_conn.commit()
                     db_conn.close()
 
@@ -566,7 +731,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 })
 
             elif action == "close_event":
-                # Purge totale de la mémoire du serveur
                 global_manager.cached_meta = {}
                 global_manager.cached_run = {}
                 global_manager.cached_voting = {}
@@ -575,7 +739,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 global_manager.received_scores = {}
                 global_manager.history_scores = {}
 
-                # Signal de nettoyage aux écrans
                 await global_manager.broadcast_json({
                     "type": "board_reset"
                 })
