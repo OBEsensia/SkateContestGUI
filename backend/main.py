@@ -46,6 +46,10 @@ mimetypes.add_type("text/css", ".css")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+UPLOAD_DIR = "uploads"
+LOGOS_DIR = os.path.join(UPLOAD_DIR, "logos")
+os.makedirs(LOGOS_DIR, exist_ok=True)
+
 
 @asynccontextmanager
 async def lifespan(fastapi_app: FastAPI):
@@ -56,6 +60,8 @@ async def lifespan(fastapi_app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+app.mount("/logos", StaticFiles(directory=LOGOS_DIR), name="logos")
 
 
 def get_db_connection() -> Iterator[sqlite3.Connection]:
@@ -199,6 +205,36 @@ def upload_competitors_excel(
     finally:
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
+
+
+@app.post("/competitions/{competition_id}/logo/")
+def upload_logo(
+        competition_id: int,
+        file: UploadFile = File(...)
+) -> Dict[str, str]:
+    for existing in glob.glob(os.path.join(LOGOS_DIR, f"comp_{competition_id}_logo.*")):
+        try:
+            os.remove(existing)
+        except OSError:
+            pass
+
+    ext = file.filename.split('.')[-1]
+    filename = f"comp_{competition_id}_logo.{ext}"
+    filepath = os.path.join(LOGOS_DIR, filename)
+
+    with open(filepath, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    return {"logo_url": f"/logos/{filename}"}
+
+
+@app.get("/competitions/{competition_id}/logo/")
+def get_logo(competition_id: int) -> Dict[str, Optional[str]]:
+    files = glob.glob(os.path.join(LOGOS_DIR, f"comp_{competition_id}_logo.*"))
+    if files:
+        filename = os.path.basename(files[0])
+        return {"logo_url": f"/logos/{filename}"}
+    return {"logo_url": None}
 
 
 @app.get("/competitions/{competition_id}/competitors/")
@@ -445,7 +481,8 @@ async def websocket_endpoint(websocket: WebSocket):
         "type": "board_meta",
         "competition_name": getattr(global_manager, "competition_name", "SKATE CONTEST"),
         "judge_count": getattr(global_manager, "judge_count", 5),
-        "max_runs": getattr(global_manager, "max_runs", 3)
+        "max_runs": getattr(global_manager, "max_runs", 3),
+        "logo_url": getattr(global_manager, "logo_url", None)
     })
 
     try:
@@ -457,11 +494,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 global_manager.judge_count = data.get("judge_count", 3)
                 global_manager.max_runs = data.get("max_runs", 3)
                 global_manager.competition_name = data.get("competition_name", "SKATE CONTEST")
+                global_manager.logo_url = data.get("logo_url")
                 await global_manager.broadcast_json({
                     "type": "board_meta",
                     "competition_name": global_manager.competition_name,
                     "judge_count": global_manager.judge_count,
-                    "max_runs": global_manager.max_runs
+                    "max_runs": global_manager.max_runs,
+                    "logo_url": global_manager.logo_url
                 })
 
             elif action == "update_meta":
@@ -471,7 +510,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     "type": "board_meta",
                     "competition_name": getattr(global_manager, "competition_name", "SKATE CONTEST"),
                     "judge_count": getattr(global_manager, "judge_count", 3),
-                    "max_runs": getattr(global_manager, "max_runs", 3)
+                    "max_runs": getattr(global_manager, "max_runs", 3),
+                    "logo_url": getattr(global_manager, "logo_url", None)
                 })
 
             elif action == "call_skater":
@@ -535,7 +575,8 @@ async def websocket_endpoint(websocket: WebSocket):
             elif action == "show_podium":
                 await global_manager.broadcast_json({
                     "type": "podium_mode",
-                    "leaderboard": data.get("leaderboard", [])
+                    "leaderboard": data.get("leaderboard", []),
+                    "category": data.get("category", "")
                 })
 
             elif action == "submit_score":

@@ -9,9 +9,12 @@
       </div>
     </header>
 
-    <!-- MODE PODIUM -->
+    <!-- MODE PODIUM & CLASSEMENT GÉNÉRAL -->
     <div v-if="isPodiumMode" class="podium-view">
-      <h1 class="podium-title">🏆 PODIUM FINAL 🏆</h1>
+
+      <!-- Titre principal épuré -->
+      <h1 class="podium-title">🏆 OVERALL RESULTS 🏆</h1>
+
       <div class="podium-podium-container">
         <!-- 2ème Place -->
         <div class="podium-step rank-2-step" v-if="leaderboard[1]">
@@ -33,9 +36,16 @@
         </div>
       </div>
 
-      <!-- Leaderboard Magnifié (Sous le Podium) -->
+      <!-- NOUVEAU : Logo et Nom de l'événement entre le podium et le tableau -->
+      <div class="branding-separator">
+        <img v-if="logoUrl" :src="logoUrl" class="branding-logo" />
+        <h2 class="branding-name">{{ competitionName.toUpperCase() }}</h2>
+      </div>
+
+      <!-- Leaderboard Global Magnifié -->
       <div class="podium-leaderboard card">
-        <h2>FINAL RANKING</h2>
+        <!-- NOUVEAU : La catégorie est intégrée au titre du tableau -->
+        <h2>FINAL OVERALL RANKING - {{ activeCategory.toUpperCase() }}</h2>
         <div class="table-responsive">
           <table class="leaderboard-table">
             <thead>
@@ -96,7 +106,7 @@
       </div>
     </div>
 
-    <!-- MODE STANDARD -->
+    <!-- MODE DIRECT STANDARD (HEATS EN COURS) -->
     <div v-else class="board-content">
       <div class="current-action-panel card">
         <div v-if="!currentCompetitorId" class="waiting-state">
@@ -157,8 +167,11 @@
                     <div class="lb-meta">{{ entry.nationality }} - {{ entry.category }}</div>
                   </td>
                   <td class="col-run" v-for="i in maxRuns" :key="'td'+i">
-                    <span v-if="entry.run_scores && entry.run_scores[i] !== undefined" :class="{'dns-text': entry.run_scores[i] < 0}">
-                      {{ entry.run_scores[i] < 0 ? 'DNS' : entry.run_scores[i].toFixed(2) }}
+                    <span v-if="entry.run_scores && entry.run_scores[i] !== undefined && entry.run_scores[i] >= 0">
+                      {{ entry.run_scores[i].toFixed(2) }}
+                    </span>
+                    <span v-else-if="entry.run_scores && entry.run_scores[i] < 0" class="dns-text">
+                      DNS
                     </span>
                     <span v-else class="run-empty">-</span>
                   </td>
@@ -167,7 +180,6 @@
                     <span v-else>{{ entry.score.toFixed(2) }}</span>
                   </td>
                 </tr>
-                <!-- Cut Line Indicator -->
                 <tr v-if="index + 1 === cutLineIndex && leaderboard.length > cutLineIndex && leaderboard[index+1].score >= 0" class="cut-line-row">
                   <td :colspan="3 + maxRuns">
                     <div class="cut-line">
@@ -205,6 +217,8 @@ const leaderboard = ref([]);
 
 const boardState = ref('waiting');
 const isPodiumMode = ref(false);
+const activeCategory = ref('');
+const logoUrl = ref(null);
 
 const cutLineIndex = ref(16);
 
@@ -229,6 +243,7 @@ const connectWebSocket = () => {
         competitionName.value = payload.competition_name || 'SKATE CONTEST';
         if (payload.judge_count) totalJudges.value = payload.judge_count;
         if (payload.max_runs) maxRuns.value = payload.max_runs;
+        logoUrl.value = payload.logo_url || null;
       }
       else if (payload.type === 'new_run') {
         currentCompetitorId.value = payload.competitor_id;
@@ -265,6 +280,7 @@ const connectWebSocket = () => {
       else if (payload.type === 'podium_mode') {
         isPodiumMode.value = true;
         if (payload.leaderboard) leaderboard.value = payload.leaderboard;
+        if (payload.category) activeCategory.value = payload.category;
       }
       else if (payload.type === 'board_reset') {
         competitionName.value = 'SKATE CONTEST';
@@ -274,6 +290,8 @@ const connectWebSocket = () => {
         leaderboard.value = [];
         finalScore.value = null;
         receivedVotes.value = 0;
+        activeCategory.value = '';
+        logoUrl.value = null;
       }
     } catch (error) {}
   };
@@ -335,7 +353,7 @@ onUnmounted(() => { if (socket) socket.close(); });
 .leaderboard-table tbody tr:hover { background-color: #222; }
 
 .col-run { text-align: center !important; color: #aaa; font-weight: bold; border-left: 1px solid #2a2a2a; }
-.run-empty { color: #444; font-weight: normal; }
+.run-empty { color: #666; font-weight: bold; font-size: 1.2rem; }
 
 .dns-row { background-color: rgba(211, 47, 47, 0.1); opacity: 0.6; }
 .dns-row:hover { background-color: rgba(211, 47, 47, 0.2) !important; }
@@ -380,6 +398,11 @@ onUnmounted(() => { if (socket) socket.close(); });
 .podium-score { font-size: 1.8rem; font-weight: 900; color: #fff; background: rgba(0,0,0,0.3); padding: 5px 15px; border-radius: 20px; }
 .gold-score { font-size: 2.5rem; background: rgba(0,0,0,0.4); color: #ffd700; }
 
-.podium-leaderboard { width: 100%; max-width: 900px; padding: 20px; background-color: rgba(26, 26, 26, 0.9); }
+/* BRANDING INTERMÉDIAIRE (Logo + Nom) */
+.branding-separator { display: flex; flex-direction: column; align-items: center; margin-bottom: 30px; text-align: center; }
+.branding-logo { max-height: 100px; max-width: 300px; object-fit: contain; margin-bottom: 10px; animation: popIn 0.8s ease-out forwards; }
+.branding-name { font-size: 2rem; color: #fff; text-transform: uppercase; letter-spacing: 3px; margin: 0; text-shadow: 0 2px 5px rgba(0,0,0,0.5); }
+
+.podium-leaderboard { width: 100%; max-width: 1000px; padding: 20px; background-color: rgba(26, 26, 26, 0.9); }
 .podium-leaderboard h2 { margin-top: 0; color: #fff; text-transform: uppercase; letter-spacing: 2px; border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 15px; text-align: center; }
 </style>

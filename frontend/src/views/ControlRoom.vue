@@ -73,6 +73,17 @@
             </div>
             <div v-if="manualAddMessage" class="info-message">{{ manualAddMessage }}</div>
           </div>
+
+          <!-- NOUVEAU : UPLOAD DU LOGO -->
+          <div class="logo-box">
+            <h3>Event Logo</h3>
+            <input type="file" accept="image/*" @change="uploadLogo" />
+            <div class="preview-container">
+               <img v-if="competitionLogoUrl" :src="competitionLogoUrl" class="preview-logo" />
+               <span v-else class="info-message">No logo selected</span>
+            </div>
+          </div>
+
         </div>
 
         <div class="skaters-list-container">
@@ -124,7 +135,6 @@
         <p class="drag-instruction">💡 Pro-tip: You can drag and drop skaters between pools!</p>
 
         <div class="pools-grid">
-          <!-- Unassigned Pool (Drag & Drop Target) -->
           <div class="pool-card unassigned-pool"
                @dragover.prevent
                @drop="onDrop($event, null)">
@@ -144,7 +154,6 @@
             </ul>
           </div>
 
-          <!-- Assigned Pools (Drag & Drop Target) -->
           <div v-for="pool in pools" :key="pool.id" class="pool-card"
                @dragover.prevent
                @drop="onDrop($event, pool.id)">
@@ -331,6 +340,7 @@ const isLive = ref(localStorage.getItem('is_live') === 'true');
 const isVotingOpen = ref(localStorage.getItem('is_voting_open') === 'true');
 const competitionId = ref(parseInt(localStorage.getItem('comp_id')) || null);
 const competitionName = ref(localStorage.getItem('comp_name') || '');
+const competitionLogoUrl = ref(localStorage.getItem('comp_logo') || null);
 const judgeCount = ref(parseInt(localStorage.getItem('judge_count')) || 3);
 const maxRuns = ref(parseInt(localStorage.getItem('max_runs')) || 3);
 const registeredSkaters = ref(JSON.parse(localStorage.getItem('skaters') || '[]'));
@@ -370,7 +380,6 @@ const quitLiveMode = async () => {
 
 const closeCompetition = () => {
   if (confirm("Are you sure you want to close the current event and return to the main menu?")) {
-
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ action: "close_event" }));
     } else {
@@ -388,6 +397,7 @@ const closeCompetition = () => {
 
     competitionId.value = null;
     competitionName.value = '';
+    competitionLogoUrl.value = null;
     registeredSkaters.value = [];
     categories.value = [];
     pools.value = [];
@@ -396,6 +406,7 @@ const closeCompetition = () => {
 
     localStorage.removeItem('comp_id');
     localStorage.removeItem('comp_name');
+    localStorage.removeItem('comp_logo');
     localStorage.removeItem('skaters');
     localStorage.removeItem('leaderboard');
     localStorage.removeItem('is_live');
@@ -442,7 +453,6 @@ const unassignedSkaters = computed(() => {
   return categorySkaters.filter(s => !assignedIds.includes(s.id));
 });
 
-/* --- DRAG AND DROP LOGIC --- */
 const onDragStart = (event, skaterId) => {
   event.dataTransfer.setData('skaterId', skaterId);
   event.target.style.opacity = '0.5';
@@ -459,7 +469,6 @@ const onDrop = async (event, targetPoolId) => {
     await assignSkater(skaterId, targetPoolId);
   }
 };
-/* --------------------------- */
 
 const autoGenerateQualifs = async () => {
   if (!competitionId.value || !selectedCategoryId.value) return;
@@ -527,6 +536,42 @@ onMounted(async () => {
   });
 });
 
+// NOUVEAU : Fonction pour récupérer le logo enregistré
+const fetchLogo = async () => {
+  if (!competitionId.value) return;
+  try {
+    const response = await fetch(`/competitions/${competitionId.value}/logo/`);
+    if (response.ok) {
+      const data = await response.json();
+      if (data.logo_url) {
+        competitionLogoUrl.value = data.logo_url + '?t=' + new Date().getTime();
+        localStorage.setItem('comp_logo', competitionLogoUrl.value);
+      } else {
+        competitionLogoUrl.value = null;
+        localStorage.removeItem('comp_logo');
+      }
+    }
+  } catch (error) { console.error(error); }
+};
+
+// NOUVEAU : Fonction pour uploader le logo
+const uploadLogo = async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const response = await fetch(`/competitions/${competitionId.value}/logo/`, {
+      method: 'POST', body: formData
+    });
+    if (response.ok) {
+      const data = await response.json();
+      competitionLogoUrl.value = data.logo_url + '?t=' + new Date().getTime();
+      localStorage.setItem('comp_logo', competitionLogoUrl.value);
+    }
+  } catch (error) { console.error(error); }
+};
+
 const loadCompetition = async () => {
   if (!selectedCompetitionId.value) return;
   const comp = existingCompetitions.value.find(c => c.id === selectedCompetitionId.value);
@@ -536,6 +581,7 @@ const loadCompetition = async () => {
     pools.value = [];
     liveLeaderboard.value = [];
     saveState();
+    await fetchLogo();
     await fetchRegisteredSkaters();
     await fetchCategories();
   }
@@ -555,6 +601,7 @@ const createCompetition = async () => {
       pools.value = [];
       liveLeaderboard.value = [];
       saveState();
+      await fetchLogo();
       await fetchRegisteredSkaters();
       await fetchCategories();
     }
@@ -732,7 +779,8 @@ const startLiveEvent = async () => {
       action: "start_live",
       judge_count: judgeCount.value,
       max_runs: maxRuns.value,
-      competition_name: competitionName.value
+      competition_name: competitionName.value,
+      logo_url: competitionLogoUrl.value
     }));
     refreshLiveLeaderboard();
   };
@@ -812,9 +860,33 @@ const markDNS = () => {
   }
 };
 
-const triggerPodium = () => {
+const triggerPodium = async () => {
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify({ action: "show_podium", leaderboard: liveLeaderboard.value }));
+  if (!competitionId.value || !selectedCategoryId.value) return;
+
+  try {
+    const response = await fetch(`/competitions/${competitionId.value}/categories/${selectedCategoryId.value}/global-ranking/`);
+    if (response.ok) {
+      const globalRanking = await response.json();
+      const catName = categories.value.find(c => c.id === selectedCategoryId.value)?.name || '';
+
+      const formattedRanking = globalRanking.map(r => ({
+        id: r.competitor_id,
+        name: `${r.first_name} ${r.last_name}`,
+        score: r.best_score,
+        run_scores: r.run_scores,
+        nationality: r.nationality,
+        category: catName,
+        highest_phase: r.highest_phase
+      }));
+
+      socket.send(JSON.stringify({
+        action: "show_podium",
+        leaderboard: formattedRanking,
+        category: catName
+      }));
+    }
+  } catch (error) { console.error("Error fetching global ranking:", error); }
 };
 
 const submitIndividualScore = (judgeId) => {
@@ -896,10 +968,48 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .btn:disabled { background-color: #ccc; cursor: not-allowed; }
 .success-message { color: #2e7d32; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; }
 .info-message { color: #1976d2; font-style: italic; margin-top: 10px; }
-.split-panel { display: flex; gap: 20px; margin-top: 20px; }
-.import-box, .manual-box { flex: 1; background: #f9f9f9; padding: 15px; border-radius: 8px; border: 1px solid #ddd; }
+
+/* Grid Layout for Setup Panel to fix the intrinsic image aspect ratio bug */
+.split-panel {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  margin-top: 20px;
+}
+@media (max-width: 850px) {
+  .split-panel { grid-template-columns: 1fr; }
+}
+
+.import-box, .manual-box, .logo-box {
+  background: #f9f9f9;
+  padding: 15px;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .input-row-small { display: flex; flex-direction: column; gap: 10px; }
-.skaters-list-container { margin-top: 20px; background: #fff; border: 1px solid #eee; padding: 15px; border-radius: 8px; }
+.preview-container {
+  margin-top: auto;
+  height: 120px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.05);
+  border-radius: 6px;
+  padding: 10px;
+  box-sizing: border-box;
+}
+.preview-logo {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.skaters-list-container { margin-top: 20px; background: #fff; border: 1px solid #eee; padding: 15px; border-radius: 8px; clear: both; }
 .skaters-list { list-style: none; padding: 0; max-height: 200px; overflow-y: auto; }
 .skaters-list li { padding: 10px; border-bottom: 1px solid #eee; }
 .input-row { display: flex; gap: 20px; align-items: flex-end; margin-top: 20px; }
@@ -912,7 +1022,6 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .inline-score-badge { background-color: #4caf50; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; }
 .inline-score-badge.dns-badge-small { background-color: #d32f2f; }
 
-/* New Judges Grid & Override Styling */
 .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
 .panel-header h3 { margin: 0; }
 .instruction-text { color: #1976d2; font-size: 0.9rem; font-style: italic; }
@@ -943,7 +1052,8 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .dark-theme .draggable-item:hover { background-color: #3a3a3a; border-color: #666; }
 .dark-theme .auto-generate-box { background: #1b5e20; border-color: #2e7d32; }
 .dark-theme .active-skater { background-color: #4a401a; border-left-color: #ffd600; }
-.dark-theme .import-box, .dark-theme .manual-box { background: #2c2c2c; border-color: #444; }
+.dark-theme .import-box, .dark-theme .manual-box, .dark-theme .logo-box { background: #2c2c2c; border-color: #444; }
+.dark-theme .preview-container { background: rgba(0,0,0,0.2); }
 .dark-theme .skaters-list-container { background: #1e1e1e; border-color: #444; }
 .dark-theme .skater-assign-list li { border-bottom-color: #444; color: #e0e0e0; }
 .dark-theme .skaters-list li { border-bottom-color: #333; color: #e0e0e0; }
@@ -960,7 +1070,6 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .dark-theme .judge-indicator.voted { background-color: #388e3c; border-color: #2e7d32; }
 .dark-theme .judge-indicator.voted .judge-score-input { background-color: #1b5e20; color: #a5d6a7; }
 
-/* Dark Theme Text Contrast Adjustments */
 .dark-theme label, .dark-theme p { color: #e0e0e0; }
 .dark-theme .success-message { color: #81c784; }
 .dark-theme .info-message { color: #64b5f6; }
