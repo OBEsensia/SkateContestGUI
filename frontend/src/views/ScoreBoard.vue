@@ -36,7 +36,7 @@
         </div>
       </div>
 
-      <!-- NOUVEAU : Logo et Nom de l'événement entre le podium et le tableau -->
+      <!-- Logo et Nom de l'événement entre le podium et le tableau -->
       <div class="branding-separator">
         <img v-if="logoUrl" :src="logoUrl" class="branding-logo" />
         <h2 class="branding-name">{{ competitionName.toUpperCase() }}</h2>
@@ -44,7 +44,7 @@
 
       <!-- Leaderboard Global Magnifié -->
       <div class="podium-leaderboard card">
-        <!-- NOUVEAU : La catégorie est intégrée au titre du tableau -->
+        <!-- La catégorie est intégrée au titre du tableau -->
         <h2>FINAL OVERALL RANKING - {{ activeCategory.toUpperCase() }}</h2>
         <div class="table-responsive">
           <table class="leaderboard-table">
@@ -383,9 +383,9 @@ onUnmounted(() => { if (socket) socket.close(); });
 
 /* PODIUM VIEW */
 .podium-view { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; background: radial-gradient(circle at top, #1a1a1a 0%, #0a0a0a 100%); padding: 40px; overflow-y: auto; }
-.podium-title { font-size: 2.5rem; letter-spacing: 3px; color: #ffd700; margin-bottom: 40px; text-transform: uppercase; text-shadow: 0 0 20px rgba(255, 215, 0, 0.4); text-align: center; }
+.podium-title { font-size: 2.5rem; letter-spacing: 3px; color: #ffd700; margin-bottom: 80px; text-transform: uppercase; text-shadow: 0 0 20px rgba(255, 215, 0, 0.4); text-align: center; }
 
-.podium-podium-container { display: flex; align-items: flex-end; justify-content: center; gap: 30px; width: 100%; max-width: 800px; height: 350px; margin-bottom: 20px; }
+.podium-podium-container { display: flex; align-items: flex-end; justify-content: center; gap: 30px; width: 100%; max-width: 800px; height: 350px; margin-bottom: 40px; }
 .podium-step { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; border-radius: 12px 12px 0 0; padding: 20px; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.5); animation: slideUp 0.8s ease-out forwards; }
 .rank-1-step { background: linear-gradient(to top, #b7950b, #d4ac0d); height: 100%; border: 2px solid #f1c40f; }
 .rank-2-step { background: linear-gradient(to top, #7f8c8d, #95a5a6); height: 75%; border: 2px solid #bdc3c7; }
