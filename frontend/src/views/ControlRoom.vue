@@ -780,6 +780,7 @@ const addSkaterManually = async () => {
 
 const startLiveEvent = async () => {
   await forceResetLiveState();
+  currentRunNumber.value = 1;
   isLive.value = true;
   saveState();
   const serverIp = window.location.hostname || "127.0.0.1";
@@ -983,7 +984,6 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .success-message { color: #2e7d32; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; }
 .info-message { color: #1976d2; font-style: italic; margin-top: 10px; }
 
-/* Grid Layout for Setup Panel to fix the intrinsic image aspect ratio bug */
 .split-panel {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
