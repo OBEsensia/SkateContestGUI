@@ -169,6 +169,29 @@ def unassign_competitor_from_phase(db_connection: sqlite3.Connection, competitor
 
 def auto_generate_qualifications(db_connection: sqlite3.Connection, competition_id: int, category_id: int) -> int:
     cursor = db_connection.cursor()
+
+    # 1. PURGE STRICTE DES ANCIENNES QUALIFICATIONS
+    cursor.execute("""
+        DELETE FROM run 
+        WHERE phase = 'Qualifications' AND competitor_id IN (
+            SELECT id FROM competitor WHERE competition_id = ? AND category_id = ?
+        )
+    """, (competition_id, category_id))
+
+    cursor.execute("""
+        DELETE FROM pool_competitor 
+        WHERE pool_id IN (
+            SELECT id FROM pool WHERE competition_id = ? AND category_id = ? AND phase = 'Qualifications'
+        )
+    """, (competition_id, category_id))
+
+    cursor.execute("""
+        DELETE FROM pool 
+        WHERE competition_id = ? AND category_id = ? AND phase = 'Qualifications'
+    """, (competition_id, category_id))
+    db_connection.commit()
+
+    # 2. GÉNÉRATION PROPRE
     cursor.execute("""
         SELECT id FROM competitor 
         WHERE competition_id = ? AND category_id = ? 
@@ -187,10 +210,6 @@ def auto_generate_qualifications(db_connection: sqlite3.Connection, competition_
         base_size = total_skaters // num_pools
         remainder = total_skaters % num_pools
         sizes = [base_size + 1] * remainder + [base_size] * (num_pools - remainder)
-
-    cursor.execute("DELETE FROM pool WHERE competition_id = ? AND category_id = ? AND phase = 'Qualifications'",
-                   (competition_id, category_id))
-    db_connection.commit()
 
     current_idx = 0
     pools_created = 0
@@ -298,10 +317,51 @@ def get_phase_ranking(db_connection: sqlite3.Connection, competition_id: int, ca
 
 def generate_next_phase(db_connection: sqlite3.Connection, competition_id: int, category_id: int, current_phase: str,
                         next_phase: str, top_n: int, pools_count: int) -> List[int]:
-    ranking = get_phase_ranking(db_connection, competition_id, category_id, current_phase)
-    qualified = [r for r in ranking if r["best_score"] >= 0][:top_n]
-    qualified.reverse()
+    cursor = db_connection.cursor()
 
+    # 1. PURGE STRICTE DE LA NOUVELLE PHASE (Évite les doublons et les scores fantômes si on re-génère)
+    cursor.execute("""
+        DELETE FROM run 
+        WHERE phase = ? AND competitor_id IN (
+            SELECT id FROM competitor WHERE competition_id = ? AND category_id = ?
+        )
+    """, (next_phase, competition_id, category_id))
+
+    cursor.execute("""
+        DELETE FROM pool_competitor 
+        WHERE pool_id IN (
+            SELECT id FROM pool WHERE competition_id = ? AND category_id = ? AND phase = ?
+        )
+    """, (competition_id, category_id, next_phase))
+
+    cursor.execute("""
+        DELETE FROM pool 
+        WHERE competition_id = ? AND category_id = ? AND phase = ?
+    """, (competition_id, category_id, next_phase))
+    db_connection.commit()
+
+    # 2. RÉCUPÉRATION ET FILTRAGE STRICT DES QUALIFIÉS
+    ranking = get_phase_ranking(db_connection, competition_id, category_id, current_phase)
+
+    qualified = []
+    for r in ranking:
+        best_score = r["best_score"]
+        runs = r.get("run_scores", {})
+
+        # Le skater est pris UNIQUEMENT si sa moyenne est >= 0 ET qu'il a au moins un score validé (non DNS)
+        has_valid_run = any(score >= 0 for score in runs.values())
+
+        if best_score >= 0 and has_valid_run:
+            qualified.append(r)
+
+    # 3. ON COUPE AU TOP N DEMANDÉ ET ON INVERSE L'ORDRE
+    qualified = qualified[:top_n]
+    qualified.reverse()  # Le dernier qualifié devient le premier de la liste à être assigné
+
+    if not qualified:
+        return []
+
+    # 4. DISTRIBUTION DANS LES POULES (Parfaitement séquentielle)
     base_count = len(qualified) // pools_count
     remainder = len(qualified) % pools_count
 
@@ -309,14 +369,15 @@ def generate_next_phase(db_connection: sqlite3.Connection, competition_id: int, 
     current_skater_idx = 0
 
     for i in range(pools_count):
-        pool_id = create_pool(db_connection, PoolCreateData(competition_id, category_id, next_phase, f"Heat {i + 1}"))
+        pool_data = PoolCreateData(competition_id, category_id, next_phase, f"Heat {i + 1}")
+        pool_id = create_pool(db_connection, pool_data)
         pool_ids.append(pool_id)
 
         skaters_in_this_pool = base_count + (1 if i < remainder else 0)
         for start_order in range(1, skaters_in_this_pool + 1):
             if current_skater_idx < len(qualified):
-                assign_competitor_to_pool(db_connection, pool_id, qualified[current_skater_idx]["competitor_id"],
-                                          start_order)
+                c_id = qualified[current_skater_idx]["competitor_id"]
+                assign_competitor_to_pool(db_connection, pool_id, c_id, start_order)
                 current_skater_idx += 1
 
     return pool_ids
@@ -491,8 +552,6 @@ def get_global_ranking(db_connection: sqlite3.Connection, competition_id: int, c
     return ranking
 
 
-# --- PDF GENERATION ENGINE ---
-
 if FPDF:
     class SkateContestPDF(FPDF):
         def __init__(self, comp_name: str, logo_path: Optional[str], title: str):
@@ -620,11 +679,8 @@ def export_startlist_pdf(db_connection: sqlite3.Connection, competition_id: int,
     pdf.output(file_path)
 
 
-# (Garder tout le reste de votre code existant au-dessus, et ajouter ceci à la fin)
-
 def get_individual_scores(db_connection: sqlite3.Connection, competitor_id: int, phase: str, run_number: int) -> Dict[
     int, float]:
-    """Récupère les notes individuelles des juges pour un run précis."""
     cursor = db_connection.cursor()
     cursor.execute("""
         SELECT s.judge_id, s.score_value 
@@ -637,10 +693,7 @@ def get_individual_scores(db_connection: sqlite3.Connection, competitor_id: int,
 
 def update_run_scores(db_connection: sqlite3.Connection, competitor_id: int, phase: str, run_number: int,
                       scores_dict: Dict[int, float]) -> float:
-    """Met à jour les notes individuelles, recalcule la moyenne et sauvegarde."""
     cursor = db_connection.cursor()
-
-    # Trouver l'ID du run
     cursor.execute("SELECT id FROM run WHERE competitor_id=? AND phase=? AND run_number=?",
                    (competitor_id, phase, run_number))
     row = cursor.fetchone()
@@ -648,7 +701,6 @@ def update_run_scores(db_connection: sqlite3.Connection, competitor_id: int, pha
         raise ValueError("Run introuvable dans la base.")
     run_id = row[0]
 
-    # Mettre à jour chaque juge (UPSERT)
     for j_id, s_val in scores_dict.items():
         cursor.execute("""
             INSERT INTO score (run_id, judge_id, score_value)
@@ -656,11 +708,9 @@ def update_run_scores(db_connection: sqlite3.Connection, competitor_id: int, pha
             ON CONFLICT(run_id, judge_id) DO UPDATE SET score_value=excluded.score_value
         """, (run_id, int(j_id), float(s_val)))
 
-    # Recalculer la nouvelle moyenne
     cursor.execute("SELECT AVG(score_value) FROM score WHERE run_id=?", (run_id,))
     new_avg = cursor.fetchone()[0]
 
-    # Mettre à jour le score final du run
     cursor.execute("UPDATE run SET final_score=? WHERE id=?", (new_avg, run_id))
     db_connection.commit()
     return new_avg

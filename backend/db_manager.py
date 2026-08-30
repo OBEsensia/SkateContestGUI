@@ -18,7 +18,7 @@ def get_connection(db_path: str = DB_NAME) -> sqlite3.Connection:
     Returns:
         A connection object to the database with foreign keys enabled.
     """
-    connection = sqlite3.connect(db_path)
+    connection = sqlite3.connect(db_path, check_same_thread=False)
     # Ensure foreign key constraints are strictly enforced in SQLite
     connection.execute("PRAGMA foreign_keys = ON;")
     return connection

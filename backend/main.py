@@ -122,6 +122,11 @@ class EditScoreRequest(BaseModel):
     scores: Dict[int, float]
 
 
+class ReorderPoolRequest(BaseModel):
+    pool_id: int
+    competitor_ids: List[int]
+
+
 @app.post("/competitions/")
 def create_new_competition(
         competition_data: CompetitionCreate,
@@ -299,6 +304,22 @@ def create_new_pool(
         return {"pool_id": pool_id}
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
+
+
+@app.post("/pools/reorder/")
+def reorder_pool_endpoint(
+        req: ReorderPoolRequest,
+        db_conn: sqlite3.Connection = Depends(get_db_connection)
+) -> Dict[str, str]:
+    cursor = db_conn.cursor()
+    for index, comp_id in enumerate(req.competitor_ids, start=1):
+        cursor.execute("""
+            UPDATE pool_competitor
+            SET start_order = ?
+            WHERE pool_id = ? AND competitor_id = ?
+        """, (index, req.pool_id, comp_id))
+    db_conn.commit()
+    return {"status": "success"}
 
 
 @app.post("/pools/assign/")
