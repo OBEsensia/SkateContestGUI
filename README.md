@@ -7,35 +7,39 @@ A real-time, local-network web application designed to manage skateboarding comp
 ### 1. Registration & Management (Phase 1)
 * **Smart Excel Import**: Instantly load skater lists via `.xlsx` files. The algorithm automatically resolves first name/last name column conflicts and parses categories.
 * **Manual Wildcard Entry**: Add last-minute skaters on the fly directly from the control interface.
+* **Event Custom Branding**: Upload a custom event logo (vector, png, jpeg). The logo and competition name are securely stored and automatically pushed to the public scoreboard and official PDF exports to professionalize your event's visual identity.
 
 ### 2. Tournament Sandbox & Phase Engine (Phase 2)
 * **Tournament Sandbox**: A visual workspace allowing the organizer to filter by category and Phase (Qualifications, Semi-Final, Final).
-* **Heat/Pool Creation**: Generate pools manually or auto-distribute. Easily assign or reassign unseeded skaters using dropdowns.
+* **Flicker-Free Drag & Drop (Smart Gaps)**: Easily reassign skaters or change start orders. The system uses a mathematical "dead zone" (hysteresis) and visual transparent borders (`36px` gap with a "Drop Here" indicator) to allow pixel-perfect, fluid reordering without UI glitching.
 * **Auto-Qualification Engine (Top N)**: 
     * Automatically extracts the Top X skaters based on their Best Run score in a given phase.
+    * **Strict Verification**: The system rigorously ignores "DNS" skaters or those without any valid runs, even if the requested Top N quota is not met. It automatically purges ghost data from previous sandbox tests to guarantee clean heat generation.
     * **Reverse Start Order**: Skaters who qualify 1st will automatically skate last in the next phase (official skate contest rule).
     * **Mathematical Distribution**: Evenly distributes qualified skaters across the new phase's heats, handling remainders mathematically.
 
 ### 3. Live Control & Operational Robustness (Phase 3)
-* **1-Click "Call to Screen"**: Click "Call" next to a skater in their live heat to instantly push them to the public scoreboard and notify the judges' tablets.
-* **Safety "Re-Call" Feature**: If a mistake is made, clicking "🔄 Re-Call" resets the current run. The system retrieves the judges' previous score history for that run so they don't have to start from scratch.
+* **1-Click "Call to Screen"**: Click "Call" next to a skater in their live heat to instantly push them to the public scoreboard and notify the judges' tablets. Returning to Live Mode from the Sandbox automatically resets the system to **Run 1**.
+* **Silent "Quick Edit" (Admin Override)**: Notice a typo in a judge's score 10 minutes later? Click the discrete ✏️ icon in the Live Leaderboard. A modal allows you to fix individual judge scores, update the database, and seamlessly correct the public screen without interrupting the skater currently on course.
+* **Safety "Re-Call" Feature**: If an immediate mistake is made, clicking "🔄 Re-Call" resets the current run. The system retrieves the judges' previous score history for that run so they don't have to start from scratch.
 * **DNS (Did Not Start) Handling**: Disqualify a skater with 1 click. Assigns a `-1.0` score in the database, locking them at the bottom of the leaderboard and excluding them from future phases.
 * **Anti-Deadlock Security**: If a voting session gets stuck, the **⏹️ EXIT LIVE** button sends an asynchronous cancellation signal, clears the server's WebSocket cache, and instantly unlocks the organizer and judge interfaces.
 
 ### 4. Reporting & Archiving (Phase 4)
+* **1-Click Printables (A4 PDF)**: Instantly generate professional A4 PDF exports for **Start Lists** (grouped by Heat) and **Rankings**. These files are beautifully branded with your Event Logo, Event Name, and Category, ready to be printed and pinned on the skatepark wall.
 * **Multi-Tab Excel Export**: Generate an official `.xlsx` results file with one click (one tab per category and phase).
-* **Full Traceability**: The export lists the actual rank, individual Run scores (1, 2, and 3), highlights **DNS** skaters in red, and explicitly states if a skater qualified for the next phase (including their next Heat and Start Order).
+* **Full Traceability**: Exports list the actual rank, individual Run scores (1, 2, and 3), highlight **DNS** skaters in red, and explicitly state if a skater qualified for the next phase.
 
 ### 5. 🔄 Event Switching & Data Isolation
 * **New / Switch Event**: Safely close the active competition to create a new one or load a previous archive. This action purges the organizer's local session cache to guarantee zero data overlap between contests and attempts to broadcast a global wipe signal to all connected interfaces.
+
 ---
 
 ### ⚡ Advanced Tournament Features
 
-* **Smart Heat Generation & Drag-and-Drop:** In the Sandbox, use the **Auto-Generate Initial Heats** button to mathematically distribute unassigned skaters into optimal heats (prioritizing groups of 3 or 4) based on their registration order. Need to make a last-minute adjustment? Simply **drag and drop** a skater's name across pool cards to instantly reassign them.
-* **Dynamic Run Limits:** Tailor the contest format to your needs. Before going live, configure the maximum number of runs (2 or 3) for the active phase. The Public Score Board and the Excel exports will automatically adapt their layout and columns to match the selected format.
-* **Smart Re-Call System:** Mistakes happen in live events. If you accidentally close a voting session or need a skater to redo a run, the **🔄 Re-Call** button safely resets the current run. It automatically retrieves and restores the judges' previously entered scores on their tablets, saving time and preventing data loss.
-* **Magnified Podium Leaderboard:** Celebrating the winners is essential, but acknowledging every competitor's effort is just as important. The final Podium view now includes a magnified, comprehensive leaderboard displayed directly below the Top 3 to properly close out the competition.
+* **Magnified Branded Podium:** Celebrating the winners is essential. The final Podium view proudly displays the event logo and dynamically includes the active category in the leaderboard title (e.g., "FINAL OVERALL RANKING - OPEN BOY"). Empty runs are clearly formatted with a visual dash (`-`), and elimination thresholds feature a professional double-border separator.
+* **Dynamic Run Limits:** Tailor the contest format to your needs. Before going live, configure the maximum number of runs (2 or 3) for the active phase. The Public Score Board and the Excel/PDF exports will automatically adapt their layout and columns to match the selected format.
+* **Asynchronous Database Concurrency**: The backend utilizes thread-safe SQLite transactions (`check_same_thread=False` and strict `ON CONFLICT DO UPDATE` statements) to ensure that background operations like the "Quick Edit" safely save individual judge scores without crashing the WebSocket broadcasting loop.
 
 ---
 
@@ -94,7 +98,7 @@ A responsive, high-contrast display designed for projectors and LED walls.
 
 ## 🏗️ Tech Stack
 
-* **Backend**: Python 3, FastAPI, SQLite, Uvicorn, WebSockets.
+* **Backend**: Python 3, FastAPI, SQLite, Uvicorn, WebSockets, FPDF2 (PDF Generation).
 * **Frontend**: Vue.js 3 (Composition API), Vite, HTML5, CSS3.
 * **Deployment**: The Vue.js application is compiled into static files and served directly by the FastAPI backend on a single port.
 
@@ -120,7 +124,7 @@ Navigate to the backend directory and install the required Python packages.
 
 ```bash
 cd backend
-pip install fastapi uvicorn pydantic openpyxl python-multipart websockets
+pip install fastapi uvicorn pydantic openpyxl python-multipart websockets fpdf2
 ```
 
 ## 🔄 Updating the Application
@@ -137,6 +141,8 @@ This automated script performs a complete, safe CI/CD sequence:
 4. Protects your Data: It compares the new database schema with your existing skate_contest.db. If structural changes are detected, it automatically renames and backs up your old database (e.g., skate_contest_v1.0.0.db) before applying the new blank schema, ensuring you never lose past event records!
 
 ## 🏁 Running the Application
+
+
 To start the system, you can use the provided batch script if you are on Windows:
 ```dos
 start_skate_contest.bat
@@ -153,22 +159,26 @@ Once the server is running, access the interfaces via any web browser on the sam
 ### Step 1: Preparation & Import
 1. Launch the server using start_skate_contest.bat.
 2. Open the Control Room (http://localhost:8000).
-3. Create the event and import the skater registration Excel file.
+3. Create the event with an event name
+   4. upload the event logo,
+   5. and import the skater registration Excel file.
 
 ### Step 2: The Sandbox (Heats Creation)
 1. Select your category and the Qualifications phase.
 2. Create your Heats (e.g., "Heat 1", "Heat 2").
 3. Assign your skaters from the orange Unassigned Skaters pool into their respective heats.
+4. Optional: Click Print Start List to export the running order to PDF for the participants.
 
 ### Step 3: Going Live
 1. Click GO LIVE.
 2. Click Call next to the first skater on the list.
 3. Once their run is over, click 1. Open Voting. Judges score on their tablets. Once the last judge submits, the final average is calculated and saved.
-4. Repeat for all skaters in the phase.
+4. Correction: Use the ✏️ icon in the leaderboard to fix a score silently, or 🔄 Re-Call if the skater is still on screen.
+5. Repeat for all skaters in the phase.
 
 ### Step 4: Closing the Phase & Qualifying
 1. Click ⏹️ EXIT LIVE.
-2. Click 📥 Export Results to download and archive the official Qualifications Excel file.
+2. Click Print Ranking (PDF) or 📥 Export Results (Excel) to archive the official Qualifications results.
 3. In the green Auto-Generate Next Phase box, set it to Semi-Final, define the Top N to qualify (e.g., 16), and the number of target pools (e.g., 4).
 4. Click ⚡ Generate. The system calculates the cut, reverses the start order, and builds the semi-final heats.
 5. Click GO LIVE again, switch the view to Semi-Final, and call your first skater!
@@ -182,8 +192,9 @@ Click the 🏆 SHOW PODIUM (END CONTEST) button in the Control Room to switch th
 ├── backend/
 │   ├── main.py                  # FastAPI server, API Endpoints & WebSocket Logic
 │   ├── db_manager.py            # SQLite schema initialization
-│   ├── competition_manager.py   # Complex SQL queries, ranking math, Excel engine
+│   ├── competition_manager.py   # Complex SQL queries, ranking math, Excel/PDF engine
 │   ├── skate_contest.db         # Auto-generated relational SQLite database
+│   ├── uploads/                 # Secure directory for Event Logos
 │   └── static/                  # Production folder serving the compiled Frontend
 ├── frontend/
 │   ├── index.html               # Vite entry point
