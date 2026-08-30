@@ -135,38 +135,48 @@
           </button>
         </div>
 
-        <p class="drag-instruction">💡 Pro-tip: You can drag and drop skaters between pools!</p>
+        <p class="drag-instruction">💡 Pro-tip: Drag skaters between pools. The list will gracefully open to show your drop position!</p>
 
-        <div class="pools-grid">
+        <div class="pools-grid" @dragleave="onDragLeaveGlobal">
+          <!-- UNASSIGNED POOL -->
           <div class="pool-card unassigned-pool"
-               @dragover.prevent
-               @drop="onDrop($event, null)">
+               @dragover.prevent="onDragOverPool($event, null)"
+               @drop.prevent="onDropSkater">
             <h3>Unassigned Skaters ({{ unassignedSkaters.length }})</h3>
             <ul class="skater-assign-list">
-              <li v-for="skater in unassignedSkaters" :key="skater.id"
+              <li v-for="(skater, index) in unassignedSkaters" :key="skater.id"
                   draggable="true"
-                  @dragstart="onDragStart($event, skater.id)"
-                  class="draggable-item">
+                  @dragstart="onDragStart($event, skater, null)"
+                  @dragend="onDragEnd"
+                  @dragover.prevent="onDragOverSkater($event, null, index)"
+                  class="draggable-item"
+                  :class="{
+                    'drag-over-top': dragOverInfo.poolId === null && dragOverInfo.index === index && dragOverInfo.position === 'top',
+                    'drag-over-bottom': dragOverInfo.poolId === null && dragOverInfo.index === index && dragOverInfo.position === 'bottom'
+                  }">
                 <span>≡ {{ skater.first_name }} {{ skater.last_name }}</span>
-                <select @change="assignSkater(skater.id, $event.target.value)" @click.stop>
-                  <option value="" disabled selected>Assign to...</option>
-                  <option v-for="pool in pools" :key="pool.id" :value="pool.id">{{ pool.name }}</option>
-                </select>
               </li>
               <li v-if="unassignedSkaters.length === 0" class="empty-list">All skaters assigned!</li>
             </ul>
           </div>
 
+          <!-- ACTIVE POOLS -->
           <div v-for="pool in pools" :key="pool.id" class="pool-card"
-               @dragover.prevent
-               @drop="onDrop($event, pool.id)">
+               @dragover.prevent="onDragOverPool($event, pool.id)"
+               @drop.prevent="onDropSkater">
             <h3>{{ pool.name }} ({{ pool.competitors.length }})</h3>
             <ul class="skater-assign-list">
-              <li v-for="skater in pool.competitors" :key="skater.competitor_id"
+              <li v-for="(skater, index) in pool.competitors" :key="skater.competitor_id"
                   draggable="true"
-                  @dragstart="onDragStart($event, skater.competitor_id)"
-                  class="draggable-item">
-                <span>≡ {{ skater.start_order }}. {{ skater.first_name }} {{ skater.last_name }}</span>
+                  @dragstart="onDragStart($event, skater, pool.id)"
+                  @dragend="onDragEnd"
+                  @dragover.prevent="onDragOverSkater($event, pool.id, index)"
+                  class="draggable-item"
+                  :class="{
+                    'drag-over-top': dragOverInfo.poolId === pool.id && dragOverInfo.index === index && dragOverInfo.position === 'top',
+                    'drag-over-bottom': dragOverInfo.poolId === pool.id && dragOverInfo.index === index && dragOverInfo.position === 'bottom'
+                  }">
+                <span>≡ {{ index + 1 }}. {{ skater.first_name }} {{ skater.last_name }}</span>
               </li>
               <li v-if="pool.competitors.length === 0" class="empty-list">Empty pool. Drop skaters here.</li>
             </ul>
@@ -248,10 +258,10 @@
         <div v-for="pool in pools" :key="pool.id" class="pool-card live-pool-card">
           <h3>{{ pool.name }}</h3>
           <ul class="skater-assign-list">
-            <li v-for="skater in pool.competitors" :key="skater.competitor_id"
+            <li v-for="(skater, index) in pool.competitors" :key="skater.competitor_id"
                 :class="{ 'active-skater': currentCompetitorId === skater.competitor_id }">
               <span class="skater-name-block">
-                {{ skater.start_order }}. {{ skater.first_name }} {{ skater.last_name }}
+                {{ index + 1 }}. {{ skater.first_name }} {{ skater.last_name }}
                 <span v-if="skater.current_run_score !== null && skater.current_run_score !== undefined"
                       class="inline-score-badge"
                       :class="{ 'dns-badge-small': skater.current_run_score < 0 }">
@@ -321,7 +331,6 @@
 
       <hr style="margin: 30px 0;" />
 
-      <!-- LEADERBOARD AVEC ÉDITION -->
       <div class="leaderboard-panel card">
         <h2>Live Leaderboard</h2>
         <div class="table-responsive">
@@ -346,7 +355,6 @@
                     <div class="lb-meta">{{ entry.nationality }} - {{ entry.category }}</div>
                   </td>
 
-                  <!-- NOUVEAU : Colonne de Run avec bouton d'édition discret -->
                   <td class="col-run" v-for="i in maxRuns" :key="'td'+i">
                     <div class="run-score-cell">
                         <span v-if="entry.run_scores && entry.run_scores[i] !== undefined && entry.run_scores[i] >= 0">
@@ -472,7 +480,6 @@ const closeCompetition = () => {
     isLive.value = false;
     isVotingOpen.value = false;
     currentCompetitorId.value = null;
-
     competitionId.value = null;
     competitionName.value = '';
     competitionLogoUrl.value = null;
@@ -521,10 +528,8 @@ const receivedScores = ref([]);
 const finalScore = ref(null);
 
 const organizerScores = ref({});
-
 let socket = null;
 
-// NOUVELLES VARIABLES POUR LE QUICK EDIT
 const isEditModalOpen = ref(false);
 const editSkaterName = ref('');
 const editCompetitorId = ref(null);
@@ -538,22 +543,151 @@ const unassignedSkaters = computed(() => {
   return categorySkaters.filter(s => !assignedIds.includes(s.id));
 });
 
-const onDragStart = (event, skaterId) => {
-  event.dataTransfer.setData('skaterId', skaterId);
-  event.target.style.opacity = '0.5';
+// ==========================================
+// DRAG AND DROP INTELLIGENT (SMART GAPS & DEAD ZONE)
+// ==========================================
+const draggedSkater = ref(null);
+const dragSourcePoolId = ref(null);
+const dragOverInfo = ref({ poolId: null, index: null, position: null });
+
+const onDragStart = (event, skater, poolId) => {
+  draggedSkater.value = skater;
+  dragSourcePoolId.value = poolId;
+  event.dataTransfer.effectAllowed = 'move';
+  setTimeout(() => { event.target.style.opacity = '0.5'; }, 0);
 };
 
-const onDrop = async (event, targetPoolId) => {
+const onDragEnd = (event) => {
   event.target.style.opacity = '1';
-  const skaterId = event.dataTransfer.getData('skaterId');
-  if (!skaterId) return;
+  draggedSkater.value = null;
+  dragSourcePoolId.value = null;
+  dragOverInfo.value = { poolId: null, index: null, position: null };
+};
 
-  if (targetPoolId === null) {
-    await unassignSkater(skaterId);
-  } else {
-    await assignSkater(skaterId, targetPoolId);
+const onDragLeaveGlobal = () => {
+  dragOverInfo.value = { poolId: null, index: null, position: null };
+};
+
+const onDragOverSkater = (event, poolId, index) => {
+  event.preventDefault(); // Indispensable pour autoriser le drop
+  event.stopPropagation(); // Bloque l'event de la poule globale en arrière-plan
+
+  const rect = event.currentTarget.getBoundingClientRect();
+  const y = event.clientY - rect.top;
+
+  // HYSTÉRÉSIS (Zone morte) : On ignore le milieu (40% central) pour une stabilité parfaite
+  const threshold = rect.height * 0.30;
+
+  if (y < threshold) {
+    dragOverInfo.value = { poolId, index, position: 'top' };
+  } else if (y > rect.height - threshold) {
+    dragOverInfo.value = { poolId, index, position: 'bottom' };
   }
 };
+
+const onDragOverPool = (event, poolId) => {
+  if (event.target.tagName.toLowerCase() === 'ul' || event.target.classList.contains('empty-list') || event.target.classList.contains('pool-card')) {
+    dragOverInfo.value = { poolId, index: null, position: 'bottom' };
+  }
+};
+
+const onDropSkater = async () => {
+  if (!draggedSkater.value) return;
+
+  const sourcePoolId = dragSourcePoolId.value;
+  const targetPoolId = dragOverInfo.value.poolId;
+
+  let insertIndex = 0;
+  if (dragOverInfo.value.index !== null) {
+      insertIndex = dragOverInfo.value.index;
+      if (dragOverInfo.value.position === 'bottom') {
+          insertIndex += 1;
+      }
+  }
+
+  // Compensation si on descend un skateur dans sa propre poule
+  if (sourcePoolId === targetPoolId && sourcePoolId !== null) {
+      const tPool = pools.value.find(p => p.id === targetPoolId);
+      const originalIndex = tPool.competitors.findIndex(c => (c.competitor_id || c.id) === (draggedSkater.value.competitor_id || draggedSkater.value.id));
+      if (originalIndex !== -1 && originalIndex < insertIndex) {
+          insertIndex -= 1;
+      }
+  }
+
+  const skater = draggedSkater.value;
+  const skaterId = skater.competitor_id || skater.id;
+
+  const sId = sourcePoolId;
+  const tId = targetPoolId;
+  const iIdx = insertIndex;
+
+  // Reset visuel
+  draggedSkater.value = null;
+  dragSourcePoolId.value = null;
+  dragOverInfo.value = { poolId: null, index: null, position: null };
+
+  // --- 1. OPTIMISTIC UPDATE (Zéro délai visuel) ---
+  if (sId !== null) {
+      const sPool = pools.value.find(p => p.id === sId);
+      if (sPool) sPool.competitors = sPool.competitors.filter(c => (c.competitor_id || c.id) !== skaterId);
+  }
+
+  if (tId !== null) {
+      const tPool = pools.value.find(p => p.id === tId);
+      if (tPool) {
+          const normalizedSkater = {
+              competitor_id: skaterId,
+              first_name: skater.first_name,
+              last_name: skater.last_name,
+              nationality: skater.nationality,
+              start_order: 999
+          };
+          tPool.competitors.splice(iIdx, 0, normalizedSkater);
+          tPool.competitors.forEach((c, idx) => c.start_order = idx + 1);
+      }
+  }
+
+  // --- 2. BACKEND SYNC ---
+  if (tId === null) {
+      await fetch('/pools/unassign/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ competitor_id: skaterId, phase: selectedPhase.value })
+      });
+  } else {
+      if (sId !== tId) {
+          await fetch('/pools/assign/', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ pool_id: tId, competitor_id: skaterId, start_order: 999 })
+          });
+      }
+      const tPool = pools.value.find(p => p.id === tId);
+      if (tPool) {
+          const ids = tPool.competitors.map(c => c.competitor_id || c.id);
+          await fetch('/pools/reorder/', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ pool_id: tId, competitor_ids: ids })
+          });
+      }
+  }
+
+  if (sId !== null && sId !== tId) {
+      const sPool = pools.value.find(p => p.id === sId);
+      if (sPool) {
+          const ids = sPool.competitors.map(c => c.competitor_id || c.id);
+          await fetch('/pools/reorder/', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ pool_id: sId, competitor_ids: ids })
+          });
+      }
+  }
+
+  await fetchPools();
+};
+// ==========================================
 
 const autoGenerateQualifs = async () => {
   if (!competitionId.value || !selectedCategoryId.value) return;
@@ -615,10 +749,6 @@ onMounted(async () => {
       await fetchPools();
     }
   }
-
-  document.addEventListener('dragend', (e) => {
-    if (e.target && e.target.style) e.target.style.opacity = '1';
-  });
 });
 
 const fetchLogo = async () => {
@@ -732,40 +862,6 @@ const createNewPool = async () => {
       newPoolName.value = '';
       await fetchPools();
     }
-  } catch (error) { console.error(error); }
-};
-
-const assignSkater = async (skaterId, poolId) => {
-  if (!poolId || !skaterId) return;
-  const targetPool = pools.value.find(p => p.id === parseInt(poolId));
-  const newOrder = targetPool ? targetPool.competitors.length + 1 : 1;
-
-  try {
-    const response = await fetch('/pools/assign/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        pool_id: parseInt(poolId),
-        competitor_id: skaterId,
-        start_order: newOrder
-      })
-    });
-    if (response.ok) await fetchPools();
-  } catch (error) { console.error(error); }
-};
-
-const unassignSkater = async (skaterId) => {
-  if (!skaterId) return;
-  try {
-    const response = await fetch('/pools/unassign/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        competitor_id: parseInt(skaterId),
-        phase: selectedPhase.value
-      })
-    });
-    if (response.ok) await fetchPools();
   } catch (error) { console.error(error); }
 };
 
@@ -1003,17 +1099,13 @@ const submitIndividualScore = (judgeId) => {
   }));
 };
 
-// NOUVELLES FONCTIONS POUR LE QUICK EDIT
 const openEditModal = async (skaterEntry, runNum) => {
   editSkaterName.value = skaterEntry.name;
   editCompetitorId.value = skaterEntry.id;
   editRunNumber.value = runNum;
   editScores.value = {};
 
-  // Initialisation à blanc
-  for(let i=1; i<=judgeCount.value; i++) {
-      editScores.value[i] = 0.0;
-  }
+  for(let i=1; i<=judgeCount.value; i++) { editScores.value[i] = 0.0; }
 
   try {
       const res = await fetch(`/competitions/${competitionId.value}/competitors/${skaterEntry.id}/scores/?phase=${selectedPhase.value}&run_number=${runNum}`);
@@ -1091,13 +1183,67 @@ onUnmounted(() => {
 .pool-card h3 { margin-top: 0; padding-bottom: 10px; border-bottom: 1px solid #eee; font-size: 1.1rem; }
 
 .drag-instruction { font-style: italic; color: #1976d2; margin-bottom: 10px; font-size: 0.9rem; }
-.draggable-item { cursor: grab; padding: 8px; border: 1px solid transparent; transition: all 0.2s ease; border-radius: 4px; }
-.draggable-item:hover { background-color: #f0f0f0; border: 1px dashed #bbb; }
+
+/* DRAG & DROP STYLES (BACKGROUND CLIP + BORDER TRICK) */
+.draggable-item {
+  cursor: grab;
+  padding: 8px 10px;
+  margin: 2px 0;
+  border: 2px solid transparent;
+  transition: all 0.15s ease;
+  border-radius: 4px;
+  position: relative;
+  z-index: 5;
+  background-color: transparent;
+  background-clip: padding-box;
+}
+.draggable-item:hover { background-color: rgba(0,0,0,0.05); }
 .draggable-item:active { cursor: grabbing; opacity: 0.5; }
 
-.skater-assign-list { list-style: none; padding: 0; margin: 0; max-height: 250px; overflow-y: auto; }
-.skater-assign-list li { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #f0f0f0; font-size: 0.9rem; }
+.drag-over-top { border-top: 36px solid transparent !important; }
+.drag-over-top::before {
+  content: '↓ Drop Here ↓';
+  position: absolute;
+  top: -26px; /* Centré dans la bordure transparente de 36px */
+  left: 0;
+  right: 0;
+  height: 16px;
+  background-color: #ffb74d;
+  color: #d84315;
+  font-size: 0.75rem;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  pointer-events: none;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.drag-over-bottom { border-bottom: 36px solid transparent !important; }
+.drag-over-bottom::after {
+  content: '↑ Drop Here ↑';
+  position: absolute;
+  bottom: -26px;
+  left: 0;
+  right: 0;
+  height: 16px;
+  background-color: #ffb74d;
+  color: #d84315;
+  font-size: 0.75rem;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  pointer-events: none;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.skater-assign-list { list-style: none; padding: 0; margin: 0; min-height: 50px; max-height: 280px; overflow-y: auto; }
+.skater-assign-list li { display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; }
 .skater-assign-list select { padding: 4px; font-size: 0.8rem; max-width: 100px; }
+
 .auto-generate-box { background: #e8f5e9; padding: 20px; border-radius: 8px; border: 1px solid #c8e6c9; }
 .horizontal { display: flex; flex-direction: row; align-items: center; gap: 10px; }
 .active-skater { background-color: #fff9c4; font-weight: bold; border-left: 4px solid #fbc02d; padding-left: 5px !important; }
@@ -1157,7 +1303,6 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .leaderboard-table th, .leaderboard-table td { padding: 15px; text-align: left; border-bottom: 1px solid #ccc; }
 .leaderboard-table th { color: #555; text-transform: uppercase; font-size: 0.9rem; }
 
-/* QUICK EDIT STYLES */
 .run-score-cell { display: flex; align-items: center; gap: 8px; }
 .edit-icon-btn { background: none; border: none; cursor: pointer; opacity: 0.3; transition: opacity 0.2s; font-size: 0.9rem; padding: 0; }
 .edit-icon-btn:hover { opacity: 1; }
@@ -1179,18 +1324,19 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .dark-theme .sandbox-filters, .dark-theme .live-context-bar { background: #1a237e; }
 .dark-theme .pool-card { background: #2c2c2c; border-color: #444; }
 .dark-theme .unassigned-pool { border-color: #f57c00; background: #3e2723; }
-.dark-theme .draggable-item:hover { background-color: #3a3a3a; border-color: #666; }
 .dark-theme .auto-generate-box { background: #1b5e20; border-color: #2e7d32; }
 .dark-theme .active-skater { background-color: #4a401a; border-left-color: #ffd600; }
 .dark-theme .import-box, .dark-theme .manual-box, .dark-theme .logo-box { background: #2c2c2c; border-color: #444; }
 .dark-theme .preview-container { background: rgba(0,0,0,0.2); }
 .dark-theme .skaters-list-container { background: #1e1e1e; border-color: #444; }
-.dark-theme .skater-assign-list li { border-bottom-color: #444; color: #e0e0e0; }
 .dark-theme .skaters-list li { border-bottom-color: #333; color: #e0e0e0; }
 .dark-theme .empty-list { color: #aaa; }
 .dark-theme .drag-instruction { color: #64b5f6; }
 .dark-theme .result-panel { background-color: #3e2723; border-color: #d84315; }
 .dark-theme .score-display { color: #ffb74d; }
+
+.dark-theme .draggable-item:hover { background-color: rgba(255,255,255,0.05); }
+.dark-theme .drag-over-top::before, .dark-theme .drag-over-bottom::after { background-color: #f57c00; color: #fff; }
 
 .dark-theme .panel-header { border-bottom-color: #444; }
 .dark-theme .judge-indicator { background-color: #424242; }
