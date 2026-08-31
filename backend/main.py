@@ -439,12 +439,12 @@ def generate_phase(
 @app.get("/competitions/{competition_id}/export-results/")
 def export_results(
         competition_id: int,
+        score_mode: str = "all",
         db_conn: sqlite3.Connection = Depends(get_db_connection)
 ) -> FileResponse:
     try:
         file_path = f"export_competition_{competition_id}.xlsx"
-        export_phase_results_to_excel(db_conn, competition_id, file_path)
-
+        export_phase_results_to_excel(db_conn, competition_id, file_path, score_mode)
         return FileResponse(
             path=file_path,
             filename=f"Skate_Contest_Results_{competition_id}.xlsx",
@@ -461,11 +461,13 @@ def export_ranking_pdf_endpoint(
         competition_id: int,
         category_id: int,
         phase: str,
+        score_mode: str = "all",
+        cut_threshold: int = 0,
         db_conn: sqlite3.Connection = Depends(get_db_connection)
 ) -> FileResponse:
     try:
         file_path = f"ranking_{competition_id}_{category_id}_{phase}.pdf"
-        export_ranking_pdf(db_conn, competition_id, category_id, phase, file_path, LOGOS_DIR)
+        export_ranking_pdf(db_conn, competition_id, category_id, phase, file_path, LOGOS_DIR, score_mode, cut_threshold)
         return FileResponse(
             path=file_path,
             filename=f"Ranking_{phase}.pdf",
@@ -593,7 +595,8 @@ async def websocket_endpoint(websocket: WebSocket):
         "competition_name": getattr(global_manager, "competition_name", "SKATE CONTEST"),
         "judge_count": getattr(global_manager, "judge_count", 5),
         "max_runs": getattr(global_manager, "max_runs", 3),
-        "logo_url": getattr(global_manager, "logo_url", None)
+        "logo_url": getattr(global_manager, "logo_url", None),
+        "judge_names": getattr(global_manager, "judge_names", {})
     })
 
     try:
@@ -606,23 +609,28 @@ async def websocket_endpoint(websocket: WebSocket):
                 global_manager.max_runs = data.get("max_runs", 3)
                 global_manager.competition_name = data.get("competition_name", "SKATE CONTEST")
                 global_manager.logo_url = data.get("logo_url")
+                global_manager.judge_names = data.get("judge_names", {})
                 await global_manager.broadcast_json({
                     "type": "board_meta",
                     "competition_name": global_manager.competition_name,
                     "judge_count": global_manager.judge_count,
                     "max_runs": global_manager.max_runs,
-                    "logo_url": global_manager.logo_url
+                    "logo_url": global_manager.logo_url,
+                    "judge_names": global_manager.judge_names
                 })
 
             elif action == "update_meta":
                 if "max_runs" in data:
                     global_manager.max_runs = data["max_runs"]
+                if "judge_names" in data:
+                    global_manager.judge_names = data["judge_names"]
                 await global_manager.broadcast_json({
                     "type": "board_meta",
                     "competition_name": getattr(global_manager, "competition_name", "SKATE CONTEST"),
                     "judge_count": getattr(global_manager, "judge_count", 3),
                     "max_runs": getattr(global_manager, "max_runs", 3),
-                    "logo_url": getattr(global_manager, "logo_url", None)
+                    "logo_url": getattr(global_manager, "logo_url", None),
+                    "judge_names": getattr(global_manager, "judge_names", {})
                 })
 
             elif action == "call_skater":
@@ -705,7 +713,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 await global_manager.broadcast_json({
                     "type": "score_received",
-                    "judge_id": judge_id
+                    "judge_id": judge_id,
+                    "score": score
                 })
 
                 current_judge_count = getattr(global_manager, "judge_count", 3)

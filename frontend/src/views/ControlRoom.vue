@@ -3,6 +3,12 @@
     <header class="header">
       <h1>Skate Contest - Control Room</h1>
       <div class="header-controls">
+        <select v-model="exportScoreMode" class="export-mode-select" v-if="competitionId" title="Export Layout Settings">
+            <option value="all">📊 All Scores</option>
+            <option value="best_only">⭐ Best Score Only</option>
+            <option value="runs_only">🏃 Runs Only</option>
+            <option value="none">🔒 Ranks Only (No Scores)</option>
+        </select>
         <button class="btn success small" @click="downloadResults" v-if="competitionId">
           📥 Export Results
         </button>
@@ -218,12 +224,21 @@
             <option :value="3">3 Runs</option>
           </select>
         </div>
+        <div class="form-group" style="width: 100%;">
+          <label>Judge Names (Optional):</label>
+          <div style="display: flex; gap: 15px; flex-wrap: wrap;">
+             <div v-for="i in judgeCount" :key="'name'+i" style="display: flex; align-items: center; gap: 5px;">
+                <strong>J{{ i }}</strong>
+                <input type="text" v-model="judgeNames[i]" @change="updateLiveMeta" placeholder="Name" style="width: 130px;" />
+             </div>
+          </div>
+        </div>
         <button class="btn danger large wide" @click="startLiveEvent" :disabled="!competitionId">GO LIVE</button>
       </div>
     </section>
 
     <section v-if="isLive" class="live-section card">
-      <h2>Live Control Dashboard</h2>
+      <h2>Live Control Dashboard <span class="highlight-phase">- {{ selectedPhase.toUpperCase() }}</span></h2>
 
       <div class="live-context-bar">
         <div class="form-group">
@@ -242,7 +257,7 @@
           </select>
         </div>
         <div class="form-group">
-          <label>Current Run Number:</label>
+          <label>Displayed Run Scores:</label>
           <input v-model.number="currentRunNumber" type="number" min="1" :max="maxRuns" />
         </div>
         <div class="form-group">
@@ -268,14 +283,17 @@
                   {{ skater.current_run_score < 0 ? 'DNS' : skater.current_run_score.toFixed(1) }}
                 </span>
               </span>
-              <button
-                class="btn small"
-                :class="currentCompetitorId === skater.competitor_id ? 'warning' : 'primary'"
-                @click="callSkater(skater.competitor_id, skater.first_name, skater.last_name)"
-                :disabled="isVotingOpen && currentCompetitorId !== skater.competitor_id"
-              >
-                {{ currentCompetitorId === skater.competitor_id ? '🔄 Re-Call' : 'Call' }}
-              </button>
+              <div class="call-buttons-group">
+                <button
+                  v-for="r in maxRuns" :key="'btn'+r"
+                  class="btn small"
+                  :class="currentCompetitorId === skater.competitor_id && currentRunNumber === r ? 'warning' : 'primary'"
+                  @click="callSkater(skater.competitor_id, skater.first_name, skater.last_name, r)"
+                  :disabled="isVotingOpen && !(currentCompetitorId === skater.competitor_id && currentRunNumber === r)"
+                >
+                  {{ currentCompetitorId === skater.competitor_id && currentRunNumber === r ? '🔄 R' + r : 'Run ' + r }}
+                </button>
+              </div>
             </li>
           </ul>
         </div>
@@ -305,15 +323,19 @@
         <div class="judges-grid">
           <div v-for="i in judgeCount" :key="i"
                class="judge-indicator"
-               :class="{ 'voted': receivedScores.includes(i) }">
-            <div class="judge-header">Judge {{ i }}</div>
+               :class="{ 'voted': receivedScores[i] !== undefined }">
+            <div class="judge-header">
+               Judge {{ i }}
+               <span v-if="judgeNames && judgeNames[i]"><br/>({{ judgeNames[i] }})</span>
+            </div>
 
             <input
+              :id="'judge-input-' + i"
               v-if="isVotingOpen"
               type="number"
               v-model.number="organizerScores[i]"
               @keydown.enter="submitIndividualScore(i)"
-              :placeholder="receivedScores.includes(i) ? '✓' : '...'"
+              :placeholder="receivedScores[i] !== undefined ? receivedScores[i].toFixed(1) : '...'"
               min="0" max="100" step="0.1"
               class="judge-score-input"
             />
@@ -332,7 +354,13 @@
       <hr style="margin: 30px 0;" />
 
       <div class="leaderboard-panel card">
-        <h2>Live Leaderboard</h2>
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px;">
+           <h2>Live Leaderboard <span class="highlight-phase">- {{ selectedPhase.toUpperCase() }}</span></h2>
+           <div style="display: flex; gap: 10px; align-items: center; background: #ffe0b2; padding: 5px 15px; border-radius: 20px; border: 1px solid #ff9800;">
+              <strong style="color: #e65100;">✂️ Cut Line (Top N):</strong>
+              <input v-model.number="cutThreshold" type="number" min="0" style="width: 70px; padding: 5px; text-align: center;" placeholder="0" title="Set to 0 to hide" />
+           </div>
+        </div>
         <div class="table-responsive">
           <table class="leaderboard-table">
             <thead>
@@ -345,7 +373,10 @@
             </thead>
             <tbody>
               <template v-for="(entry, index) in liveLeaderboard" :key="index">
-                <tr :class="{'dns-row': entry.score < 0}">
+                <tr :class="{
+                  'dns-row': entry.score < 0,
+                  'cut-row-indicator': cutThreshold > 0 && index === cutThreshold
+                }">
                   <td class="col-rank">
                     <span v-if="entry.score >= 0" class="rank-badge">{{ index + 1 }}</span>
                     <span v-else class="rank-badge dns-badge">-</span>
@@ -396,7 +427,9 @@
 
         <div class="edit-judges-list">
           <div class="form-group edit-judge-row" v-for="j in judgeCount" :key="'edit'+j">
-            <label>Judge {{ j }}:</label>
+            <label>Judge {{ j }}
+              <span v-if="judgeNames[j]">({{ judgeNames[j] }})</span>:
+            </label>
             <input type="number" v-model.number="editScores[j]" min="0" max="100" step="0.1" />
           </div>
         </div>
@@ -429,8 +462,19 @@ const competitionName = ref(localStorage.getItem('comp_name') || '');
 const competitionLogoUrl = ref(localStorage.getItem('comp_logo') || null);
 const judgeCount = ref(parseInt(localStorage.getItem('judge_count')) || 3);
 const maxRuns = ref(parseInt(localStorage.getItem('max_runs')) || 3);
+const judgeNames = ref(JSON.parse(localStorage.getItem('judge_names') || '{}'));
 const registeredSkaters = ref(JSON.parse(localStorage.getItem('skaters') || '[]'));
 const liveLeaderboard = ref([]);
+const exportScoreMode = ref(localStorage.getItem('export_score_mode') || 'all');
+const cutThreshold = ref(parseInt(localStorage.getItem('cut_threshold')) || 0);
+
+watch(exportScoreMode, (newVal) => {
+  localStorage.setItem('export_score_mode', newVal);
+});
+
+watch(cutThreshold, (newVal) => {
+  localStorage.setItem('cut_threshold', newVal);
+});
 
 const saveState = () => {
   localStorage.setItem('is_live', isLive.value);
@@ -440,13 +484,25 @@ const saveState = () => {
   localStorage.setItem('judge_count', judgeCount.value);
   localStorage.setItem('max_runs', maxRuns.value);
   localStorage.setItem('skaters', JSON.stringify(registeredSkaters.value));
+  localStorage.setItem('judge_names', JSON.stringify(judgeNames.value));
+};
+
+const updateLiveMeta = () => {
+  saveState();
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({
+      action: "update_meta",
+      max_runs: maxRuns.value,
+      judge_names: judgeNames.value
+    }));
+  }
 };
 
 const forceResetLiveState = async () => {
   isVotingOpen.value = false;
   currentCompetitorId.value = null;
   currentSkaterName.value = '';
-  receivedScores.value = [];
+  receivedScores.value = {};
   finalScore.value = null;
   organizerScores.value = {};
   saveState();
@@ -498,6 +554,7 @@ const closeCompetition = () => {
     localStorage.removeItem('is_voting_open');
     localStorage.removeItem('max_runs');
     localStorage.removeItem('judge_count');
+    localStorage.removeItem('judge_names'); judgeNames.value = {};
   }
 };
 
@@ -524,7 +581,7 @@ const genPoolCount = ref(4);
 const currentCompetitorId = ref(null);
 const currentSkaterName = ref('');
 const currentRunNumber = ref(1);
-const receivedScores = ref([]);
+const receivedScores = ref({});
 const finalScore = ref(null);
 
 const organizerScores = ref({});
@@ -893,7 +950,7 @@ const downloadResults = () => {
     alert("Please create or load a competition first.");
     return;
   }
-  window.location.href = `/competitions/${competitionId.value}/export-results/`;
+  window.location.href = `/competitions/${competitionId.value}/export-results/?score_mode=${exportScoreMode.value}`;
 };
 
 const downloadStartListPDF = () => {
@@ -903,7 +960,7 @@ const downloadStartListPDF = () => {
 
 const downloadRankingPDF = () => {
   if (!competitionId.value || !selectedCategoryId.value || !selectedPhase.value) return;
-  window.open(`/competitions/${competitionId.value}/categories/${selectedCategoryId.value}/export-ranking-pdf/?phase=${selectedPhase.value}`, '_blank');
+  window.open(`/competitions/${competitionId.value}/categories/${selectedCategoryId.value}/export-ranking-pdf/?phase=${selectedPhase.value}&score_mode=${exportScoreMode.value}&cut_threshold=${cutThreshold.value}`, '_blank');
 };
 
 const fetchRegisteredSkaters = async () => {
@@ -970,7 +1027,8 @@ const startLiveEvent = async () => {
       judge_count: judgeCount.value,
       max_runs: maxRuns.value,
       competition_name: competitionName.value,
-      logo_url: competitionLogoUrl.value
+      logo_url: competitionLogoUrl.value,
+      judge_names: judgeNames.value
     }));
     refreshLiveLeaderboard();
   };
@@ -983,15 +1041,15 @@ const startLiveEvent = async () => {
       }
       else if (payload.type === 'new_run') {
         if (payload.previous_scores) {
-          receivedScores.value = Object.keys(payload.previous_scores).map(Number);
+          receivedScores.value = { ...payload.previous_scores };
         } else {
-          receivedScores.value = [];
+          receivedScores.value = {};
         }
       } else if (payload.type === 'voting_opened') {
         isVotingOpen.value = true;
         saveState();
       } else if (payload.type === 'score_received') {
-        if (!receivedScores.value.includes(payload.judge_id)) receivedScores.value.push(payload.judge_id);
+        receivedScores.value[payload.judge_id] = payload.score;
       } else if (payload.type === 'run_completed') {
         if (payload.is_cancelled) {
           await forceResetLiveState();
@@ -1014,8 +1072,10 @@ const startLiveEvent = async () => {
   socket.onclose = () => { setTimeout(startLiveEvent, 2000); };
 };
 
-const callSkater = async (skaterId, firstName, lastName) => {
+const callSkater = async (skaterId, firstName, lastName, runNum) => {
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
+  currentRunNumber.value = runNum;
 
   await forceResetLiveState();
 
@@ -1097,6 +1157,17 @@ const submitIndividualScore = (judgeId) => {
     judge_id: judgeId,
     score: scoreToSubmit
   }));
+
+  const nextJudgeId = judgeId + 1;
+  if (nextJudgeId <= judgeCount.value) {
+    nextTick(() => {
+      const nextInput = document.getElementById(`judge-input-${nextJudgeId}`);
+      if (nextInput) {
+        nextInput.focus();
+        nextInput.select();
+      }
+    });
+  }
 };
 
 const openEditModal = async (skaterEntry, runNum) => {
@@ -1163,6 +1234,10 @@ onUnmounted(() => {
 .control-room.dark-theme { background-color: #121212; color: #e0e0e0; }
 .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .header-controls { display: flex; align-items: center; gap: 15px; }
+.highlight-phase {
+  color: #f57c00;
+  font-weight: 900;
+}
 .btn-theme { background-color: #e0e0e0; border: none; padding: 8px 15px; border-radius: 20px; cursor: pointer; font-weight: bold; transition: background-color 0.3s; }
 .btn-theme:hover { background-color: #d5d5d5; }
 .live-indicator { background-color: #d32f2f; color: white; padding: 5px 15px; border-radius: 20px; font-weight: bold; animation: pulse 2s infinite; }
@@ -1177,14 +1252,15 @@ onUnmounted(() => {
 .btn.theme:hover { background-color: #555; }
 
 .pool-controls { display: flex; gap: 10px; margin-bottom: 20px; }
-.pools-grid, .live-pools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
+.pools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
+.live-pools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(450px, 1fr)); gap: 20px; }
 .pool-card { background: #fff; border: 1px solid #ccc; border-radius: 6px; padding: 15px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); transition: background-color 0.3s ease; }
 .unassigned-pool { border: 2px dashed #ff9800; background: #fff3e0; }
 .pool-card h3 { margin-top: 0; padding-bottom: 10px; border-bottom: 1px solid #eee; font-size: 1.1rem; }
 
 .drag-instruction { font-style: italic; color: #1976d2; margin-bottom: 10px; font-size: 0.9rem; }
 
-/* DRAG & DROP STYLES (BACKGROUND CLIP + BORDER TRICK) */
+/* DRAG & DROP STYLES */
 .draggable-item {
   cursor: grab;
   padding: 8px 10px;
@@ -1204,7 +1280,7 @@ onUnmounted(() => {
 .drag-over-top::before {
   content: '↓ Drop Here ↓';
   position: absolute;
-  top: -26px; /* Centré dans la bordure transparente de 36px */
+  top: -26px;
   left: 0;
   right: 0;
   height: 16px;
@@ -1259,6 +1335,17 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .btn.small { padding: 5px 10px; font-size: 0.85rem; }
 .btn.wide { width: 100%; margin-top: 10px; }
 .btn:disabled { background-color: #ccc; cursor: not-allowed; }
+.call-buttons-group {
+  display: flex;
+  gap: 5px;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+.call-buttons-group .btn.small {
+  white-space: nowrap;
+  padding: 5px 8px;
+}
 .success-message { color: #2e7d32; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; }
 .info-message { color: #1976d2; font-style: italic; margin-top: 10px; }
 
@@ -1278,7 +1365,16 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .active-call-info { background: #1976d2; color: white; padding: 15px; border-radius: 8px; margin-top: 20px; }
 .active-call-info h3 { margin: 0; font-size: 1.5rem; }
 
-.skater-name-block { display: flex; align-items: center; gap: 8px; }
+.skater-name-block {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-grow: 1;
+  margin-right: 10px;
+}
 .inline-score-badge { background-color: #4caf50; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; }
 .inline-score-badge.dns-badge-small { background-color: #d32f2f; }
 
@@ -1313,6 +1409,33 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .modal-subtitle { color: #666; font-style: italic; margin-bottom: 20px; }
 .edit-judge-row { flex-direction: row !important; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 10px; }
 .edit-judge-row input { width: 100px; text-align: center; font-size: 1.2rem; font-weight: bold; }
+.export-mode-select {
+  padding: 8px 12px;
+  border-radius: 20px;
+  border: 1px solid #ccc;
+  background-color: #fff;
+  font-weight: bold;
+  cursor: pointer;
+  outline: none;
+}
+
+/* Style de la ligne de Cut dans le Live Leaderboard */
+.cut-row-indicator td {
+  border-top: 3px dashed #d32f2f !important;
+  position: relative;
+}
+.cut-row-indicator td:first-child::before {
+  content: '✂ CUT';
+  position: absolute;
+  top: -10px;
+  left: -40px;
+  background: #d32f2f;
+  color: white;
+  font-size: 0.7rem;
+  font-weight: bold;
+  padding: 2px 6px;
+  border-radius: 10px;
+}
 
 /* Dark Theme Adjustments */
 .dark-theme .card { background: #1e1e1e; box-shadow: 0 2px 8px rgba(0,0,0,0.5); }
@@ -1354,4 +1477,9 @@ input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-r
 .dark-theme .leaderboard-table td { border-bottom-color: #333; }
 .dark-theme .modal-content { background: #1e1e1e; border: 1px solid #444; }
 .dark-theme .edit-judge-row { border-bottom-color: #333; }
+.dark-theme .export-mode-select {
+  background-color: #333;
+  color: #e0e0e0;
+  border-color: #444;
+}
 </style>
