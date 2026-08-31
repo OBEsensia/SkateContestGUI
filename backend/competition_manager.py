@@ -383,7 +383,8 @@ def generate_next_phase(db_connection: sqlite3.Connection, competition_id: int, 
     return pool_ids
 
 
-def export_phase_results_to_excel(db_connection: sqlite3.Connection, competition_id: int, file_path: str) -> None:
+def export_phase_results_to_excel(db_connection: sqlite3.Connection, competition_id: int, file_path: str,
+                                  score_mode: str = "all") -> None:
     workbook = openpyxl.Workbook()
     workbook.remove(workbook.active)
 
@@ -418,9 +419,14 @@ def export_phase_results_to_excel(db_connection: sqlite3.Connection, competition
             max_runs_to_display = max(2, max_run_num)
 
             next_phase = next_phase_map.get(phase)
-            headers = ["Rank", "First Name", "Last Name", "Nationality", "Best Score"]
-            for i in range(1, max_runs_to_display + 1):
-                headers.append(f"Run {i}")
+
+            # --- HEADER DYNAMIQUE ---
+            headers = ["Rank", "First Name", "Last Name", "Nationality"]
+            if score_mode in ["all", "best_only"]:
+                headers.append("Best Score")
+            if score_mode in ["all", "runs_only"]:
+                for i in range(1, max_runs_to_display + 1):
+                    headers.append(f"Run {i}")
 
             if next_phase:
                 headers.extend([f"Qualified for {next_phase}?", f"Heat ({next_phase})", f"Order ({next_phase})"])
@@ -428,6 +434,7 @@ def export_phase_results_to_excel(db_connection: sqlite3.Connection, competition
             sheet.append(headers)
             for cell in sheet[1]: cell.font = header_font
 
+            # --- DATA DYNAMIQUE ---
             for rank_data in ranking:
                 c_id = rank_data["competitor_id"]
                 best_score = rank_data["best_score"]
@@ -437,18 +444,21 @@ def export_phase_results_to_excel(db_connection: sqlite3.Connection, competition
                     rank_data["rank"],
                     rank_data["first_name"],
                     rank_data["last_name"],
-                    rank_data["nationality"],
-                    "DNS" if is_dns else round(best_score, 2)
+                    rank_data["nationality"]
                 ]
 
-                for i in range(1, max_runs_to_display + 1):
-                    r_score = rank_data["run_scores"].get(i, "")
-                    if r_score == -1.0:
-                        row_data.append("DNS")
-                    elif r_score != "":
-                        row_data.append(round(r_score, 2))
-                    else:
-                        row_data.append("")
+                if score_mode in ["all", "best_only"]:
+                    row_data.append("DNS" if is_dns else round(best_score, 2))
+
+                if score_mode in ["all", "runs_only"]:
+                    for i in range(1, max_runs_to_display + 1):
+                        r_score = rank_data["run_scores"].get(i, "")
+                        if r_score == -1.0:
+                            row_data.append("DNS")
+                        elif r_score != "":
+                            row_data.append(round(r_score, 2))
+                        else:
+                            row_data.append("")
 
                 if next_phase:
                     cursor.execute("""
@@ -474,7 +484,6 @@ def export_phase_results_to_excel(db_connection: sqlite3.Connection, competition
         workbook["No Results"].append(["No data available for export."])
 
     workbook.save(file_path)
-    logger.info(f"Results exported successfully to {file_path}")
 
 
 def get_global_ranking(db_connection: sqlite3.Connection, competition_id: int, category_id: int) -> List[
@@ -561,14 +570,20 @@ if FPDF:
             self.doc_title = title
 
         def header(self):
+            # Position Y de base si aucun logo n'est présent
+            start_y = 15
+
             if self.logo_path and os.path.exists(self.logo_path):
                 try:
+                    # Le logo commence à y=8 avec une hauteur de 20 (descend jusqu'à y=28)
                     self.image(self.logo_path, x=10, y=8, h=20)
+                    # On repousse le texte sous le logo (28 + 4mm de marge)
+                    start_y = 32
                 except Exception as e:
                     logger.error(f"Could not load logo for PDF: {e}")
 
+            self.set_y(start_y)
             self.set_font("helvetica", "B", 16)
-            self.set_y(15)
             self.cell(w=0, h=8, text=self.comp_name, align="C", new_x="LMARGIN", new_y="NEXT")
 
             self.set_font("helvetica", "B", 12)
@@ -582,7 +597,7 @@ if FPDF:
 
 
 def export_ranking_pdf(db_connection: sqlite3.Connection, competition_id: int, category_id: int, phase: str,
-                       file_path: str, logo_dir: str) -> None:
+                       file_path: str, logo_dir: str, score_mode: str = "all", cut_threshold: int = 0) -> None:
     if not FPDF: raise RuntimeError("fpdf2 is not installed.")
 
     cursor = db_connection.cursor()
@@ -609,30 +624,51 @@ def export_ranking_pdf(db_connection: sqlite3.Connection, competition_id: int, c
     pdf.add_page()
     pdf.set_font("helvetica", size=10)
 
+    # Calcul du nombre de colonnes pour fusionner la ligne de Cut proprement
+    cols = 3
+    if score_mode in ["all", "runs_only"]: cols += max_run
+    if score_mode in ["all", "best_only"]: cols += 1
+
     with pdf.table(text_align="CENTER") as table:
         row = table.row()
         row.cell("Rank")
         row.cell("Skater", align="LEFT")
         row.cell("Nat.")
-        for i in range(max_run):
-            row.cell(f"Run {i + 1}")
-        row.cell("Best Score")
 
+        # --- HEADER DYNAMIQUE ---
+        if score_mode in ["all", "runs_only"]:
+            for i in range(max_run):
+                row.cell(f"Run {i + 1}")
+        if score_mode in ["all", "best_only"]:
+            row.cell("Best Score")
+
+        current_idx = 0
         for r in ranking:
+            current_idx += 1
             row = table.row()
             row.cell(str(r["rank"]))
             row.cell(f"{r['first_name']} {r['last_name']}", align="LEFT")
             row.cell(r["nationality"])
-            for i in range(max_run):
-                score = r["run_scores"].get(i + 1, "")
-                if score == -1.0:
-                    row.cell("DNS")
-                elif score != "":
-                    row.cell(f"{score:.2f}")
-                else:
-                    row.cell("-")
-            best = r["best_score"]
-            row.cell("DNS" if best < 0 else f"{best:.2f}")
+
+            # --- DATA DYNAMIQUE ---
+            if score_mode in ["all", "runs_only"]:
+                for i in range(max_run):
+                    score = r["run_scores"].get(i + 1, "")
+                    if score == -1.0:
+                        row.cell("DNS")
+                    elif score != "":
+                        row.cell(f"{score:.2f}")
+                    else:
+                        row.cell("-")
+
+            if score_mode in ["all", "best_only"]:
+                best = r["best_score"]
+                row.cell("DNS" if best < 0 else f"{best:.2f}")
+
+            # INSERTION DE LA LIGNE DE CUT (PDF)
+            if cut_threshold > 0 and current_idx == cut_threshold:
+                cut_row = table.row()
+                cut_row.cell(f"--- QUALIFICATION CUT (TOP {cut_threshold}) ---", colspan=cols, align="CENTER")
 
     pdf.output(file_path)
 
