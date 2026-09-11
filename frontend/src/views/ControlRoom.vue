@@ -3,6 +3,9 @@
     <header class="header">
       <h1>Skate Contest - Control Room</h1>
       <div class="header-controls">
+        <button class="btn theme small" @click="openQrModal" title="Show QR Code for Judges">
+          📱 QR Connect
+        </button>
         <select v-model="exportScoreMode" class="export-mode-select" v-if="competitionId" title="Export Layout Settings">
             <option value="all">📊 All Scores</option>
             <option value="best_only">⭐ Best Score Only</option>
@@ -437,6 +440,28 @@
         <div class="modal-actions" style="margin-top: 20px; display: flex; gap: 10px; justify-content: flex-end;">
           <button class="btn" @click="isEditModalOpen = false">Cancel</button>
           <button class="btn success" @click="saveEditedScores">Save & Broadcast</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- FENÊTRE MODALE DU QR CODE -->
+    <div class="modal-overlay" v-if="isQrModalOpen" @click.self="isQrModalOpen = false">
+      <div class="modal-content text-center">
+        <h3 class="modal-title">📱 Connect Judge Pad</h3>
+        <p class="modal-subtitle">Scan this QR code with any tablet connected to the local WiFi.</p>
+
+        <div class="qr-container">
+           <!-- Fait appel directement à notre nouvelle route Python qui génère l'image -->
+           <img :src="'/api/judge-qr/'" alt="Judge QR Code" class="qr-image" />
+        </div>
+
+        <div class="manual-url-box">
+          <p style="margin: 0 0 5px 0;">Or type this URL manually:</p>
+          <strong>{{ serverInfo.judge_url }}</strong>
+        </div>
+
+        <div class="modal-actions" style="margin-top: 20px; display: flex; justify-content: center;">
+          <button class="btn large" @click="isQrModalOpen = false">Close</button>
         </div>
       </div>
     </div>
@@ -1072,6 +1097,19 @@ const startLiveEvent = async () => {
   socket.onclose = () => { setTimeout(startLiveEvent, 2000); };
 };
 
+const isQrModalOpen = ref(false);
+const serverInfo = ref({ ip: '', judge_url: '' });
+
+const openQrModal = async () => {
+  try {
+    const res = await fetch('/api/server-info/');
+    if (res.ok) {
+      serverInfo.value = await res.json();
+    }
+  } catch(e) { console.error("Could not fetch server IP:", e); }
+  isQrModalOpen.value = true;
+};
+
 const callSkater = async (skaterId, firstName, lastName, runNum) => {
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
 
@@ -1323,6 +1361,15 @@ onUnmounted(() => {
 .auto-generate-box { background: #e8f5e9; padding: 20px; border-radius: 8px; border: 1px solid #c8e6c9; }
 .horizontal { display: flex; flex-direction: row; align-items: center; gap: 10px; }
 .active-skater { background-color: #fff9c4; font-weight: bold; border-left: 4px solid #fbc02d; padding-left: 5px !important; }
+
+/* Styles pour la modale QR Code */
+.text-center { text-align: center; }
+.qr-container { background: white; padding: 20px; border-radius: 12px; display: inline-block; margin: 15px 0; border: 2px solid #eee; }
+.qr-image { width: 250px; height: 250px; display: block; }
+.manual-url-box { background: rgba(0,0,0,0.05); padding: 15px; border-radius: 8px; margin-top: 10px; }
+.manual-url-box strong { font-size: 1.2rem; color: #1976d2; user-select: all; }
+.dark-theme .manual-url-box { background: rgba(255,255,255,0.05); }
+.dark-theme .manual-url-box strong { color: #64b5f6; }
 
 .form-group { display: flex; flex-direction: column; gap: 10px; }
 input, select { padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-radius: 4px; background-color: white; color: #333; }

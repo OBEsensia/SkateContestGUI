@@ -4,6 +4,18 @@ import os
 import shutil
 import sqlite3
 import glob
+import socket
+import subprocess
+import ctypes
+import sys
+from io import BytesIO
+from fastapi.responses import StreamingResponse
+
+try:
+    import qrcode
+except ImportError:
+    qrcode = None
+
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional, Any, Iterator
 
@@ -54,11 +66,42 @@ UPLOAD_DIR = "uploads"
 LOGOS_DIR = os.path.join(UPLOAD_DIR, "logos")
 os.makedirs(LOGOS_DIR, exist_ok=True)
 
+def setup_windows_firewall():
+    """Vérifie et demande l'ouverture du port 8000 sur le pare-feu Windows via UAC."""
+    if os.name != 'nt':
+        return  # Ignore si le système n'est pas sous Windows
+
+    rule_name = "Skate Contest Control Room (Port 8000)"
+
+    # On vérifie discrètement si la règle existe déjà
+    check_cmd = f'netsh advfirewall firewall show rule name="{rule_name}"'
+    result = subprocess.run(check_cmd, capture_output=True, text=True, shell=True)
+
+    # Si la commande échoue ou que la règle n'est pas trouvée, on demande sa création
+    if "No rules match" in result.stdout or result.returncode != 0:
+        logger.info(f"Firewall rule missing. Prompting Windows UAC for '{rule_name}'...")
+
+        # Commande de création de la règle
+        add_cmd = f'netsh advfirewall firewall add rule name="{rule_name}" dir=in action=allow protocol=TCP localport=8000 profile=any'
+
+        # Exécution en tant qu'Administrateur (Déclenche le pop-up Windows "Voulez-vous autoriser...")
+        # L'argument '0' permet de cacher l'invite de commande noire qui s'exécute en arrière-plan
+        ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", f"/c {add_cmd}", None, 0)
+
+        if ret > 32:
+            logger.info("Windows Firewall port 8000 configured successfully.")
+        else:
+            logger.warning("UAC prompt declined or firewall configuration failed.")
+    else:
+        logger.info("Windows Firewall rule already exists. Port 8000 is open.")
+
+
 
 @asynccontextmanager
 async def lifespan(fastapi_app: FastAPI):
     logger.info("Starting up server, initializing database schema...")
     setup_database()
+    setup_windows_firewall()
     yield
     logger.info("Shutting down server...")
 
@@ -532,6 +575,49 @@ async def api_edit_score(req: EditScoreRequest):
         return {"status": "success"}
     finally:
         db_conn.close()
+
+
+def get_local_ip() -> str:
+    """Détecte l'adresse IP de la machine sur le réseau local Wi-Fi/Ethernet."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # Tente une connexion (n'envoie rien) pour forcer l'OS à révéler l'IP locale utilisée
+        s.connect(('10.255.255.255', 1))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = '127.0.0.1'
+    finally:
+        s.close()
+    return ip
+
+
+@app.get("/api/server-info/")
+def get_server_info():
+    ip = get_local_ip()
+    return {
+        "ip": ip,
+        "judge_url": f"http://{ip}:8000/#/judge",
+        "public_url": f"http://{ip}:8000/#/board"
+    }
+
+
+@app.get("/api/judge-qr/")
+def get_judge_qr():
+    if not qrcode:
+        raise HTTPException(status_code=501, detail="qrcode library missing. Run: pip install qrcode[pil]")
+
+    ip = get_local_ip()
+    url = f"http://{ip}:8000/#/judge"
+
+    qr = qrcode.QRCode(version=1, box_size=10, border=2)
+    qr.add_data(url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return StreamingResponse(buf, media_type="image/png")
 
 
 class ConnectionManager:
